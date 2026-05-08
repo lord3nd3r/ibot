@@ -122,6 +122,9 @@ def main():
     dispatcher.register_plugins(plugins)
     bot.dispatcher = dispatcher
 
+    # Load per-channel disabled commands from DB
+    dispatcher.load_disabled_commands()
+
     # Run setup functions
     from ibot.sopel_shim.bot import SopelWrapper
     for plugin in plugins:

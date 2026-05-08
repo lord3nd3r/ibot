@@ -95,6 +95,10 @@ def rehash(bot, trigger):
 
         cmd_count = len(core_bot.dispatcher._command_handlers)
         rule_count = len(core_bot.dispatcher._rule_handlers)
+
+        # Reload disabled commands cache
+        core_bot.dispatcher.load_disabled_commands()
+
         bot.say(
             f'Rehash complete: {len(plugins)} plugins loaded '
             f'({cmd_count} commands, {rule_count} rules)')
@@ -415,3 +419,134 @@ def bot_status(bot, trigger):
         f'Rules: {n_rules} | '
         f'Events: {n_events}'
     )
+
+
+# ---- Per-Channel Command Disable/Enable ----
+
+# Protected commands that cannot be disabled
+_PROTECTED_COMMANDS = {
+    'disable', 'enable', 'disabled',
+    'rehash', 'reload', 'load', 'unload', 'plugins',
+    'bquit', 'die', 'raw',
+}
+
+
+@plugin.require_admin('Only admins can disable commands.')
+@plugin.require_privmsg('This command must be used in PM.')
+@plugin.command('disable')
+def disable_cmd(bot, trigger):
+    """Disable a command in a channel. Usage (PM): .disable <command> <#channel>"""
+    args = trigger.group(2)
+    if not args:
+        bot.reply('Usage: disable <command> <#channel>')
+        return
+
+    parts = args.strip().split()
+    if len(parts) < 2:
+        bot.reply('Usage: disable <command> <#channel>')
+        return
+
+    cmd_name = parts[0].lower()
+    channel = parts[1]
+
+    if not channel.startswith(('#', '&')):
+        bot.reply('Channel must start with # or &')
+        return
+
+    if cmd_name in _PROTECTED_COMMANDS:
+        bot.reply(f'Cannot disable protected command: {cmd_name}')
+        return
+
+    core_bot = bot._bot
+    channel_lower = channel.lower()
+
+    # Update memory cache
+    disabled = core_bot.memory.setdefault('disabled_commands', {})
+    chan_disabled = disabled.setdefault(channel_lower, set())
+
+    if cmd_name in chan_disabled:
+        bot.reply(f'"{cmd_name}" is already disabled in {channel}')
+        return
+
+    chan_disabled.add(cmd_name)
+
+    # Persist to DB
+    core_bot.db.set_channel_value(channel, 'disabled_commands',
+                                   sorted(chan_disabled))
+
+    bot.reply(f'Disabled "{cmd_name}" in {channel}')
+    LOGGER.info("Command '%s' disabled in %s by %s",
+                cmd_name, channel, trigger.nick)
+
+
+@plugin.require_admin('Only admins can enable commands.')
+@plugin.require_privmsg('This command must be used in PM.')
+@plugin.command('enable')
+def enable_cmd(bot, trigger):
+    """Enable a previously disabled command in a channel. Usage (PM): .enable <command> <#channel>"""
+    args = trigger.group(2)
+    if not args:
+        bot.reply('Usage: enable <command> <#channel>')
+        return
+
+    parts = args.strip().split()
+    if len(parts) < 2:
+        bot.reply('Usage: enable <command> <#channel>')
+        return
+
+    cmd_name = parts[0].lower()
+    channel = parts[1]
+
+    if not channel.startswith(('#', '&')):
+        bot.reply('Channel must start with # or &')
+        return
+
+    core_bot = bot._bot
+    channel_lower = channel.lower()
+
+    disabled = core_bot.memory.get('disabled_commands', {})
+    chan_disabled = disabled.get(channel_lower, set())
+
+    if cmd_name not in chan_disabled:
+        bot.reply(f'"{cmd_name}" is not disabled in {channel}')
+        return
+
+    chan_disabled.discard(cmd_name)
+
+    # Clean up empty sets
+    if not chan_disabled:
+        disabled.pop(channel_lower, None)
+        core_bot.db.delete_channel_value(channel, 'disabled_commands')
+    else:
+        core_bot.db.set_channel_value(channel, 'disabled_commands',
+                                       sorted(chan_disabled))
+
+    bot.reply(f'Enabled "{cmd_name}" in {channel}')
+    LOGGER.info("Command '%s' enabled in %s by %s",
+                cmd_name, channel, trigger.nick)
+
+
+@plugin.require_admin
+@plugin.require_privmsg('This command must be used in PM.')
+@plugin.command('disabled')
+def disabled_list(bot, trigger):
+    """List disabled commands. Usage (PM): .disabled [#channel]"""
+    channel = (trigger.group(2) or '').strip()
+    core_bot = bot._bot
+    disabled = core_bot.memory.get('disabled_commands', {})
+
+    if channel:
+        # Show disabled commands for a specific channel
+        chan_disabled = disabled.get(channel.lower(), set())
+        if chan_disabled:
+            bot.reply(f'Disabled in {channel}: {", ".join(sorted(chan_disabled))}')
+        else:
+            bot.reply(f'No commands disabled in {channel}')
+    else:
+        # Show all channels with disabled commands
+        if not disabled:
+            bot.reply('No commands disabled in any channel.')
+            return
+        for chan, cmds in sorted(disabled.items()):
+            if cmds:
+                bot.reply(f'{chan}: {", ".join(sorted(cmds))}')
