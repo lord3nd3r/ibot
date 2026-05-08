@@ -383,8 +383,17 @@ class IRCBot:
                     f'PRIVMSG {target} :IDENTIFY {password}')
 
         # Join configured channels
-        channels = self.settings.core.channels
-        for channel in channels:
+        channels = set(self.settings.core.channels)
+        
+        # Load persistent channels from DB (those joined via .bjoin)
+        try:
+            p_chans = self.db.get_plugin_value('admin', 'persistent_channels', [])
+            if p_chans:
+                channels.update(p_chans)
+        except Exception:
+            LOGGER.exception("Failed to load persistent channels from DB")
+
+        for channel in sorted(channels):
             channel = channel.strip()
             if channel:
                 await self._send_raw(f'JOIN {channel}')

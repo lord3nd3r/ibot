@@ -299,8 +299,16 @@ def bot_join(bot, trigger):
     parts = args.strip().split(None, 1)
     channel = parts[0]
     key = parts[1] if len(parts) > 1 else None
+    
     bot.join(channel, key)
     bot.say(f'Joining {channel}')
+
+    # Persist for reboot
+    core_bot = bot._bot
+    p_chans = core_bot.db.get_plugin_value('admin', 'persistent_channels', [])
+    if channel.lower() not in [c.lower() for c in p_chans]:
+        p_chans.append(channel)
+        core_bot.db.set_plugin_value('admin', 'persistent_channels', p_chans)
 
 
 @plugin.require_admin('Only admins can make the bot part channels.')
@@ -314,7 +322,15 @@ def bot_part(bot, trigger):
     parts = args.strip().split(None, 1)
     channel = parts[0]
     msg = parts[1] if len(parts) > 1 else None
+    
     bot.part(channel, msg)
+
+    # Remove from persistent list
+    core_bot = bot._bot
+    p_chans = core_bot.db.get_plugin_value('admin', 'persistent_channels', [])
+    new_chans = [c for c in p_chans if c.lower() != channel.lower()]
+    if len(new_chans) != len(p_chans):
+        core_bot.db.set_plugin_value('admin', 'persistent_channels', new_chans)
 
 
 # ---- Raw IRC / Messaging ----
