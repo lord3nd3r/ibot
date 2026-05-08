@@ -402,7 +402,12 @@ class IRCBot:
                     f'PRIVMSG {target} :IDENTIFY {password}')
 
         # Join configured channels
-        channels = set(self.settings.core.channels)
+        config_channels = self.settings.core.channels
+        LOGGER.info("Config channels (raw): %r", config_channels)
+        LOGGER.info("Config channels (type): %s", type(config_channels))
+        
+        channels = set(config_channels) if config_channels else set()
+        LOGGER.info("Config channels after set(): %d channels", len(channels))
         
         # Load persistent channels from DB (those joined via .bjoin)
         try:
@@ -419,12 +424,14 @@ class IRCBot:
         except Exception:
             LOGGER.exception("Failed to load persistent channels from DB")
 
-        LOGGER.info("Total channels to join: %d", len(channels))
+        LOGGER.info("Total channels to join: %d - %s", len(channels), sorted(channels))
         for channel in sorted(channels):
             channel = channel.strip()
             if channel:
                 await self._send_raw(f'JOIN {channel}')
                 LOGGER.info("Joining %s", channel)
+            else:
+                LOGGER.warning("Skipping empty channel string")
 
     # --- Channel/User Tracking ---
 
