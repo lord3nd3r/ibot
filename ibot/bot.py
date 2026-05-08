@@ -59,22 +59,25 @@ class Channel:
         self.name = Identifier(name)
         self.privileges = SopelIdentifierMemory()
         self.topic = ''
-        self.users = set()
+        self.users = SopelIdentifierMemory()
 
     def has_privilege(self, nick, privilege):
         priv = self.privileges.get(nick, 0)
         return priv >= privilege
 
-    def add_user(self, nick, privilege=0):
+    def add_user(self, nick, privilege=0, user_obj=None):
         nick_id = Identifier(nick)
-        self.users.add(nick_id)
+        if user_obj:
+            self.users[nick_id] = user_obj
+        elif nick_id not in self.users:
+            self.users[nick_id] = User(nick)
         if privilege:
             current = self.privileges.get(nick_id, 0)
             self.privileges[nick_id] = current | privilege
 
     def remove_user(self, nick):
         nick_id = Identifier(nick)
-        self.users.discard(nick_id)
+        self.users.pop(nick_id, None)
         self.privileges.pop(nick_id, None)
 
 
@@ -397,13 +400,13 @@ class IRCBot:
         if nick_id.lower() == Identifier(self.nick).lower():
             if chan_id not in self.channels:
                 self.channels[chan_id] = Channel(channel)
-        else:
-            if chan_id in self.channels:
-                self.channels[chan_id].add_user(nick)
 
         if nick_id not in self.users:
             self.users[nick_id] = User(nick)
         self.users[nick_id].channels.add(chan_id)
+
+        if chan_id in self.channels:
+            self.channels[chan_id].add_user(nick, user_obj=self.users[nick_id])
 
     def _track_part(self, nick, channel):
         """Track a user leaving a channel."""
@@ -446,8 +449,8 @@ class IRCBot:
                 if chan_id in self.channels:
                     chan = self.channels[chan_id]
                     priv = chan.privileges.pop(old_id, 0)
-                    chan.users.discard(old_id)
-                    chan.users.add(new_id)
+                    chan.users.pop(old_id, None)
+                    chan.users[new_id] = user
                     if priv:
                         chan.privileges[new_id] = priv
 
@@ -521,10 +524,11 @@ class IRCBot:
                 priv |= MODE_TO_PRIVILEGE[name[0]]
                 name = name[1:]
             if name:
-                self.channels[chan_id].add_user(name, priv)
                 if Identifier(name) not in self.users:
                     self.users[Identifier(name)] = User(name)
                 self.users[Identifier(name)].channels.add(chan_id)
+                self.channels[chan_id].add_user(
+                    name, priv, user_obj=self.users[Identifier(name)])
 
     def _handle_topic(self, command, params, prefix):
         """Track channel topic changes."""
