@@ -329,14 +329,9 @@ class Dispatcher:
                                 func, pretrigger, pname, match=match)
             else:
                 # Try command handlers
-                channel = pretrigger.sender
                 for compiled, func, pname in self._command_handlers:
                     match = compiled.match(text)
                     if match:
-                        # Check if this command is disabled in this channel
-                        cmd_name = match.group(1).lower() if match.group(1) else ''
-                        if channel and self._is_command_disabled(channel, cmd_name):
-                            continue
                         self._dispatch_to_func(
                             func, pretrigger, pname, match=match)
 
@@ -385,6 +380,12 @@ class Dispatcher:
         if match is None:
             return
 
+        # Check if this plugin is disabled in this channel
+        channel = pretrigger.sender
+        if channel and channel.startswith(('#', '&')):
+            if self._is_plugin_disabled(channel, plugin_name):
+                return
+
         trigger = Trigger(self.settings, pretrigger, match)
 
         # Check predicates (require_admin, require_chanmsg, etc.)
@@ -427,39 +428,41 @@ class Dispatcher:
         else:
             _run()
 
-    def _is_command_disabled(self, channel, cmd_name):
-        """Check if a command is disabled in a channel via memory cache."""
-        disabled = self.bot.memory.get('disabled_commands', {})
+    def _is_plugin_disabled(self, channel, plugin_name):
+        """Check if a plugin is disabled in a channel via memory cache."""
+        # The admin plugin can never be disabled
+        if plugin_name == 'admin':
+            return False
+        disabled = self.bot.memory.get('disabled_plugins', {})
         channel_lower = channel.lower()
         if channel_lower in disabled:
-            return cmd_name.lower() in disabled[channel_lower]
+            return plugin_name.lower() in disabled[channel_lower]
         return False
 
     def load_disabled_commands(self):
-        """Load disabled commands from the DB into bot.memory cache."""
+        """Load disabled plugins per channel from the DB into bot.memory cache."""
         disabled = {}
-        # Scan all channels the bot knows about, plus any stored in DB
         try:
             from ibot.sopel_shim.db import ChannelValues
             from sqlalchemy.sql import select
+            import json
             with self.bot.db.session() as session:
                 results = session.execute(
                     select(ChannelValues)
-                    .where(ChannelValues.key == 'disabled_commands')
+                    .where(ChannelValues.key == 'disabled_plugins')
                 ).scalars()
                 for row in results:
-                    import json
                     try:
-                        cmds = json.loads(row.value)
-                        if isinstance(cmds, list):
+                        plugins = json.loads(row.value)
+                        if isinstance(plugins, list):
                             disabled[row.channel.lower()] = set(
-                                c.lower() for c in cmds)
+                                p.lower() for p in plugins)
                     except (json.JSONDecodeError, ValueError):
                         pass
         except Exception:
-            LOGGER.exception("Failed to load disabled commands from DB")
-        self.bot.memory['disabled_commands'] = disabled
-        LOGGER.info("Loaded disabled commands for %d channels", len(disabled))
+            LOGGER.exception("Failed to load disabled plugins from DB")
+        self.bot.memory['disabled_plugins'] = disabled
+        LOGGER.info("Loaded disabled plugins for %d channels", len(disabled))
 
     def get_interval_jobs(self):
         """Return list of (interval_seconds, func, plugin_name) tuples."""
