@@ -614,7 +614,7 @@ class IRCBot:
         # Handle graceful shutdown
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
-                self._loop.add_signal_handler(sig, self._signal_shutdown)
+                self._loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(self._signal_shutdown(s)))
             except (NotImplementedError, RuntimeError):
                 pass
 
@@ -634,19 +634,28 @@ class IRCBot:
                             self._interval_runner(iv, func, pname))
                         self._interval_tasks.append(task)
 
-                # Wait for read loop to end (disconnection)
-                await read_task
-                send_task.cancel()
+                # Wait for either the read task to finish or the bot to stop
+                done, pending = await asyncio.wait(
+                    [read_task], 
+                    return_when=asyncio.FIRST_COMPLETED
+                )
 
-                # Cancel interval tasks
+                # Cleanup tasks for this connection session
+                send_task.cancel()
                 for task in self._interval_tasks:
                     task.cancel()
                 self._interval_tasks.clear()
 
+                # Ensure connection is closed
+                if self._writer:
+                    self._writer.close()
+                    await self._writer.wait_closed()
+
             except asyncio.CancelledError:
                 break
             except Exception:
-                LOGGER.exception("Connection error")
+                if self._running:
+                    LOGGER.exception("Connection error")
 
             if not self._running:
                 break
@@ -654,27 +663,36 @@ class IRCBot:
             if self.settings.core.reconnect_on_disconnect:
                 LOGGER.info("Reconnecting in %d seconds...",
                             self._reconnect_delay)
-                await asyncio.sleep(self._reconnect_delay)
+                try:
+                    await asyncio.sleep(self._reconnect_delay)
+                except asyncio.CancelledError:
+                    break
                 self._reconnect_delay = min(
                     self._reconnect_delay * 2, 300)
             else:
                 break
 
-        # Cleanup
+        # Final cleanup
         await self._cleanup()
 
-    def _signal_shutdown(self):
-        """Handle shutdown signal."""
-        LOGGER.info("Shutdown signal received")
+    async def _signal_shutdown(self, sig):
+        """Handle shutdown signal by breaking the run loop."""
+        LOGGER.info("Shutdown signal received: %s", sig)
         self._running = False
+        # Close connection to break the read loop
+        if self._writer:
+            try:
+                self._writer.write(b'QUIT :Shutdown signal\r\n')
+                self._writer.close()
+            except Exception:
+                pass
 
     async def _cleanup(self):
         """Clean up connections and resources."""
         if self._writer:
             try:
-                self._writer.write(b'QUIT :Goodbye\r\n')
-                await self._writer.drain()
                 self._writer.close()
+                await self._writer.wait_closed()
             except Exception:
                 pass
 
