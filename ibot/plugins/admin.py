@@ -305,10 +305,25 @@ def bot_join(bot, trigger):
 
     # Persist for reboot
     core_bot = bot._bot
-    p_chans = core_bot.db.get_plugin_value('admin', 'persistent_channels', [])
-    if channel.lower() not in [c.lower() for c in p_chans]:
-        p_chans.append(channel)
-        core_bot.db.set_plugin_value('admin', 'persistent_channels', p_chans)
+    try:
+        p_chans = core_bot.db.get_plugin_value('admin', 'persistent_channels', [])
+        LOGGER.info("Current persistent channels before bjoin: %r", p_chans)
+        
+        if not isinstance(p_chans, list):
+            LOGGER.warning("persistent_channels was not a list, resetting to empty list")
+            p_chans = []
+        
+        if channel.lower() not in [c.lower() for c in p_chans]:
+            p_chans.append(channel)
+            core_bot.db.set_plugin_value('admin', 'persistent_channels', p_chans)
+            LOGGER.info("Saved persistent channels to DB: %r", p_chans)
+            bot.say(f'{channel} will rejoin on restart.')
+        else:
+            LOGGER.info("Channel {channel} already in persistent list")
+            bot.say(f'{channel} is already in persistent channel list.')
+    except Exception:
+        LOGGER.exception("Failed to save persistent channel")
+        bot.say(f'⚠ Warning: Failed to save {channel} for auto-rejoin')
 
 
 @plugin.require_admin('Only admins can make the bot part channels.')
@@ -327,10 +342,23 @@ def bot_part(bot, trigger):
 
     # Remove from persistent list
     core_bot = bot._bot
-    p_chans = core_bot.db.get_plugin_value('admin', 'persistent_channels', [])
-    new_chans = [c for c in p_chans if c.lower() != channel.lower()]
-    if len(new_chans) != len(p_chans):
-        core_bot.db.set_plugin_value('admin', 'persistent_channels', new_chans)
+    try:
+        p_chans = core_bot.db.get_plugin_value('admin', 'persistent_channels', [])
+        LOGGER.info("Current persistent channels before bpart: %r", p_chans)
+        
+        if not isinstance(p_chans, list):
+            LOGGER.warning("persistent_channels was not a list")
+            return
+        
+        new_chans = [c for c in p_chans if c.lower() != channel.lower()]
+        if len(new_chans) != len(p_chans):
+            core_bot.db.set_plugin_value('admin', 'persistent_channels', new_chans)
+            LOGGER.info("Removed %s from persistent channels: %r", channel, new_chans)
+            bot.say(f'{channel} removed from auto-rejoin list.')
+        else:
+            LOGGER.info("Channel %s was not in persistent list", channel)
+    except Exception:
+        LOGGER.exception("Failed to remove persistent channel")
 
 
 # ---- Raw IRC / Messaging ----

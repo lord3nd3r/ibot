@@ -408,10 +408,18 @@ class IRCBot:
         try:
             p_chans = self.db.get_plugin_value('admin', 'persistent_channels', [])
             if p_chans:
-                channels.update(p_chans)
+                if isinstance(p_chans, list):
+                    LOGGER.info("Loading %d persistent channel(s) from DB: %s", 
+                               len(p_chans), ', '.join(p_chans))
+                    channels.update(p_chans)
+                else:
+                    LOGGER.warning("persistent_channels is not a list: %r", p_chans)
+            else:
+                LOGGER.info("No persistent channels in DB")
         except Exception:
             LOGGER.exception("Failed to load persistent channels from DB")
 
+        LOGGER.info("Total channels to join: %d", len(channels))
         for channel in sorted(channels):
             channel = channel.strip()
             if channel:
