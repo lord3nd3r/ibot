@@ -84,6 +84,26 @@ class SopelMemory(dict):
         with self._lock:
             return super().pop(key, *args)
 
+    def __iter__(self):
+        with self._lock:
+            return iter(list(super().keys()))
+
+    def keys(self):
+        with self._lock:
+            return list(super().keys())
+
+    def values(self):
+        with self._lock:
+            return list(super().values())
+
+    def items(self):
+        with self._lock:
+            return list(super().items())
+
+    def __len__(self):
+        with self._lock:
+            return super().__len__()
+
 
 class SopelMemoryWithDefault(SopelMemory):
     """SopelMemory subclass that supports a default factory."""
