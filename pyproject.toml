@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ibot"
+version = "0.1.0"
+description = "A lightweight, asyncio-powered IRC bot with Sopel plugin compatibility"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+keywords = ["irc", "bot", "sopel", "asyncio", "chat"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Communications :: Chat :: Internet Relay Chat",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "sqlalchemy>=2.0.0,<3.0.0",
+]
+
+[project.optional-dependencies]
+mysql = ["pymysql>=1.0.0"]
+postgres = ["psycopg2-binary>=2.9.0"]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "mypy>=1.0.0",
+]
+
+[project.scripts]
+ibot = "ibot.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/yourusername/ibot"
+Repository = "https://github.com/yourusername/ibot"
+Issues = "https://github.com/yourusername/ibot/issues"
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]

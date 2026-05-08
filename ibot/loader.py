@@ -134,8 +134,8 @@ def load_plugins(plugin_dirs, settings=None, exclude=None, enable=None):
                                 len(plugin.commands),
                                 len(plugin.rules),
                                 len(plugin.events))
-            except Exception:
-                LOGGER.exception("Failed to load plugin: %s", name)
+            except Exception as e:
+                LOGGER.exception("Failed to load plugin '%s' from %s: %s", name, filepath, e)
 
     return plugins
 
@@ -146,7 +146,7 @@ def _load_plugin_file(name, filepath):
         f'ibot_plugins.{name}', filepath
     )
     if spec is None or spec.loader is None:
-        LOGGER.error("Cannot create module spec for %s", filepath)
+        LOGGER.error("Cannot create module spec for plugin '%s' at %s", name, filepath)
         return None
 
     module = importlib.util.module_from_spec(spec)
@@ -154,8 +154,9 @@ def _load_plugin_file(name, filepath):
 
     try:
         spec.loader.exec_module(module)
-    except Exception:
+    except Exception as e:
         del sys.modules[spec.name]
+        LOGGER.error("Failed to execute plugin module '%s': %s", name, e)
         raise
 
     plugin = PluginInfo(name, module)

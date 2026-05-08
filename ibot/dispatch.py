@@ -18,11 +18,15 @@ LOGGER = logging.getLogger(__name__)
 class RateLimitTracker:
     """Tracks rate limit timestamps per user/channel/global."""
 
+    CLEANUP_INTERVAL = 300  # Clean up old entries every 5 minutes
+    ENTRY_MAX_AGE = 3600    # Remove entries older than 1 hour
+
     def __init__(self):
         self._user_times = {}    # {func_id: {nick: last_time}}
         self._channel_times = {} # {func_id: {channel: last_time}}
         self._global_times = {}  # {func_id: last_time}
         self._lock = threading.Lock()
+        self._last_cleanup = time_mod.time()
 
     def check(self, func, nick, channel, is_admin):
         """Check if a function call is rate-limited.
@@ -70,6 +74,70 @@ class RateLimitTracker:
             if channel:
                 self._channel_times.setdefault(func_id, {})[channel] = now
             self._global_times[func_id] = now
+            
+            # Periodic cleanup
+            if now - self._last_cleanup > self.CLEANUP_INTERVAL:
+                self._cleanup_old_entries(now)
+                self._last_cleanup = now
+
+    def _cleanup_old_entries(self, now):
+        """Remove entries older than ENTRY_MAX_AGE (must be called with lock held)."""
+        cutoff = now - self.ENTRY_MAX_AGE
+        
+        # Clean user times
+        for func_id in list(self._user_times.keys()):
+            user_dict = self._user_times[func_id]
+            for nick in list(user_dict.keys()):
+                if user_dict[nick] < cutoff:
+                    del user_dict[nick]
+            if not user_dict:
+                del self._user_times[func_id]
+        
+        # Clean channel times
+        for func_id in list(self._channel_times.keys()):
+            chan_dict = self._channel_times[func_id]
+            for channel in list(chan_dict.keys()):
+                if chan_dict[channel] < cutoff:
+                    del chan_dict[channel]
+            if not chan_dict:
+                del self._channel_times[func_id]
+        
+        # Clean global times
+        for func_id in list(self._global_times.keys()):
+            if self._global_times[func_id] < cutoff:
+                del self._global_times[func_id]
+            
+            # Periodic cleanup
+            if now - self._last_cleanup > self.CLEANUP_INTERVAL:
+                self._cleanup_old_entries(now)
+                self._last_cleanup = now
+
+    def _cleanup_old_entries(self, now):
+        """Remove entries older than ENTRY_MAX_AGE (must be called with lock held)."""
+        cutoff = now - self.ENTRY_MAX_AGE
+        
+        # Clean user times
+        for func_id in list(self._user_times.keys()):
+            user_dict = self._user_times[func_id]
+            for nick in list(user_dict.keys()):
+                if user_dict[nick] < cutoff:
+                    del user_dict[nick]
+            if not user_dict:
+                del self._user_times[func_id]
+        
+        # Clean channel times
+        for func_id in list(self._channel_times.keys()):
+            chan_dict = self._channel_times[func_id]
+            for channel in list(chan_dict.keys()):
+                if chan_dict[channel] < cutoff:
+                    del chan_dict[channel]
+            if not chan_dict:
+                del self._channel_times[func_id]
+        
+        # Clean global times
+        for func_id in list(self._global_times.keys()):
+            if self._global_times[func_id] < cutoff:
+                del self._global_times[func_id]
 
 
 class Dispatcher:
@@ -295,7 +363,7 @@ class Dispatcher:
         try:
             pretrigger = PreTrigger(self.bot.nick, line)
         except Exception:
-            LOGGER.exception("Failed to parse line: %s", line)
+            LOGGER.exception("Failed to parse IRC line: %s", line)
             return
 
         event = pretrigger.event
@@ -397,7 +465,8 @@ class Dispatcher:
                 if not predicate(wrapper, trigger):
                     return
             except Exception:
-                LOGGER.exception("Predicate error in %s", plugin_name)
+                LOGGER.exception("Predicate check failed in plugin %s, function %s",
+                                 plugin_name, func.__name__)
                 return
 
         # Check rate limits
@@ -419,8 +488,8 @@ class Dispatcher:
                 func(wrapper, trigger)
                 self._rate_limiter.update(func, nick, channel)
             except Exception:
-                LOGGER.exception("Error in plugin %s function %s",
-                                 plugin_name, func.__name__)
+                LOGGER.exception("Unhandled exception in plugin '%s', function '%s', triggered by %s in %s",
+                                 plugin_name, func.__name__, trigger.nick, trigger.sender or 'PM')
 
         if threaded:
             t = threading.Thread(target=_run, daemon=True)

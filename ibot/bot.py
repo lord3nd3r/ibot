@@ -9,6 +9,7 @@ import asyncio
 import base64
 import logging
 import os
+import re
 import signal
 import ssl
 import threading
@@ -19,6 +20,12 @@ from ibot.sopel_shim.db import SopelDB
 from ibot.sopel_shim.privileges import VOICE, HALFOP, OP, ADMIN, OWNER
 
 LOGGER = logging.getLogger(__name__)
+
+# Constants
+MAX_MESSAGE_LENGTH = 400  # Conservative limit for IRC message length
+MAX_RECONNECT_DELAY = 300  # Maximum reconnect delay in seconds
+INTERVAL_JOB_MAX_FAILURES = 5  # Max consecutive failures before disabling
+INTERVAL_JOB_BACKOFF_BASE = 5  # Base backoff time in seconds
 
 # Map IRC mode chars to privilege levels
 MODE_TO_PRIVILEGE = {
@@ -98,6 +105,7 @@ class IRCBot:
         self.users = SopelIdentifierMemory()
         self.memory = SopelMemory()
         self.db = SopelDB(settings)
+        self._state_lock = threading.RLock()  # Protects channels/users
 
         # Connection
         self._reader = None
@@ -154,9 +162,20 @@ class IRCBot:
             return
         if not line.endswith('\r\n'):
             line += '\r\n'
-        LOGGER.debug(">>> %s", line.strip())
+        LOGGER.debug(">>> %s", self._sanitize_for_log(line.strip()))
         self._writer.write(line.encode('utf-8', errors='replace'))
         await self._writer.drain()
+
+    def _sanitize_for_log(self, line):
+        """Sanitize sensitive data from log output."""
+        # Hide SASL authentication
+        if line.startswith('AUTHENTICATE ') and line != 'AUTHENTICATE PLAIN':
+            return 'AUTHENTICATE [redacted]'
+        # Hide NickServ password
+        if 'PRIVMSG NickServ :IDENTIFY' in line or 'PRIVMSG nickserv :IDENTIFY' in line.lower():
+            parts = line.split('IDENTIFY', 1)
+            return parts[0] + 'IDENTIFY [redacted]'
+        return line
 
     def send_raw(self, line):
         """Send a raw IRC line (thread-safe, called by plugins)."""
@@ -167,9 +186,8 @@ class IRCBot:
     def send_privmsg(self, target, text):
         """Send a PRIVMSG (thread-safe)."""
         # Split long messages (512 bytes max per IRC line minus overhead)
-        max_len = 400  # conservative limit
-        for i in range(0, len(text), max_len):
-            chunk = text[i:i + max_len]
+        for i in range(0, len(text), MAX_MESSAGE_LENGTH):
+            chunk = text[i:i + MAX_MESSAGE_LENGTH]
             self.send_raw(f'PRIVMSG {target} :{chunk}')
 
     def send_notice(self, text, target):
@@ -406,62 +424,66 @@ class IRCBot:
         nick_id = Identifier(nick)
         chan_id = Identifier(channel)
 
-        if nick_id.lower() == Identifier(self.nick).lower():
-            if chan_id not in self.channels:
-                self.channels[chan_id] = Channel(channel)
+        with self._state_lock:
+            if nick_id.lower() == Identifier(self.nick).lower():
+                if chan_id not in self.channels:
+                    self.channels[chan_id] = Channel(channel)
 
-        if nick_id not in self.users:
-            self.users[nick_id] = User(nick)
-        self.users[nick_id].channels.add(chan_id)
+            if nick_id not in self.users:
+                self.users[nick_id] = User(nick)
+            self.users[nick_id].channels.add(chan_id)
 
-        if chan_id in self.channels:
-            self.channels[chan_id].add_user(nick, user_obj=self.users[nick_id])
+            if chan_id in self.channels:
+                self.channels[chan_id].add_user(nick, user_obj=self.users[nick_id])
 
     def _track_part(self, nick, channel):
         """Track a user leaving a channel."""
         nick_id = Identifier(nick)
         chan_id = Identifier(channel)
 
-        if nick_id.lower() == Identifier(self.nick).lower():
-            self.channels.pop(chan_id, None)
-        elif chan_id in self.channels:
-            self.channels[chan_id].remove_user(nick)
+        with self._state_lock:
+            if nick_id.lower() == Identifier(self.nick).lower():
+                self.channels.pop(chan_id, None)
+            elif chan_id in self.channels:
+                self.channels[chan_id].remove_user(nick)
 
-        if nick_id in self.users:
-            self.users[nick_id].channels.discard(chan_id)
-            if not self.users[nick_id].channels:
-                self.users.pop(nick_id, None)
+            if nick_id in self.users:
+                self.users[nick_id].channels.discard(chan_id)
+                if not self.users[nick_id].channels:
+                    self.users.pop(nick_id, None)
 
     def _track_quit(self, nick):
         """Track a user quitting."""
         nick_id = Identifier(nick)
-        if nick_id in self.users:
-            for chan_id in self.users[nick_id].channels:
-                if chan_id in self.channels:
-                    self.channels[chan_id].remove_user(nick)
-            self.users.pop(nick_id, None)
+        with self._state_lock:
+            if nick_id in self.users:
+                for chan_id in self.users[nick_id].channels:
+                    if chan_id in self.channels:
+                        self.channels[chan_id].remove_user(nick)
+                self.users.pop(nick_id, None)
 
     def _track_nick_change(self, old_nick, new_nick):
         """Track a nickname change."""
         old_id = Identifier(old_nick)
         new_id = Identifier(new_nick)
 
-        if old_id.lower() == Identifier(self.nick).lower():
-            self.nick = new_nick
+        with self._state_lock:
+            if old_id.lower() == Identifier(self.nick).lower():
+                self.nick = new_nick
 
-        if old_id in self.users:
-            user = self.users.pop(old_id)
-            user.nick = new_id
-            self.users[new_id] = user
+            if old_id in self.users:
+                user = self.users.pop(old_id)
+                user.nick = new_id
+                self.users[new_id] = user
 
-            for chan_id in user.channels:
-                if chan_id in self.channels:
-                    chan = self.channels[chan_id]
-                    priv = chan.privileges.pop(old_id, 0)
-                    chan.users.pop(old_id, None)
-                    chan.users[new_id] = user
-                    if priv:
-                        chan.privileges[new_id] = priv
+                for chan_id in user.channels:
+                    if chan_id in self.channels:
+                        chan = self.channels[chan_id]
+                        priv = chan.privileges.pop(old_id, 0)
+                        chan.users.pop(old_id, None)
+                        chan.users[new_id] = user
+                        if priv:
+                            chan.privileges[new_id] = priv
 
     def _handle_mode(self, params):
         """Track channel mode changes for privilege updates."""
@@ -473,33 +495,34 @@ class IRCBot:
             return
 
         chan_id = Identifier(channel)
-        if chan_id not in self.channels:
-            return
+        with self._state_lock:
+            if chan_id not in self.channels:
+                return
 
-        mode_str = params[1]
-        mode_params = params[2:]
-        param_idx = 0
-        adding = True
+            mode_str = params[1]
+            mode_params = params[2:]
+            param_idx = 0
+            adding = True
 
-        for char in mode_str:
-            if char == '+':
-                adding = True
-            elif char == '-':
-                adding = False
-            elif char in MODE_LETTER_TO_PRIVILEGE:
-                if param_idx < len(mode_params):
-                    nick = mode_params[param_idx]
+            for char in mode_str:
+                if char == '+':
+                    adding = True
+                elif char == '-':
+                    adding = False
+                elif char in MODE_LETTER_TO_PRIVILEGE:
+                    if param_idx < len(mode_params):
+                        nick = mode_params[param_idx]
+                        param_idx += 1
+                        priv = MODE_LETTER_TO_PRIVILEGE[char]
+                        nick_id = Identifier(nick)
+                        current = self.channels[chan_id].privileges.get(nick_id, 0)
+                        if adding:
+                            self.channels[chan_id].privileges[nick_id] = current | priv
+                        else:
+                            self.channels[chan_id].privileges[nick_id] = current & ~priv
+                elif char in 'beIkl':
+                    # These modes take a parameter
                     param_idx += 1
-                    priv = MODE_LETTER_TO_PRIVILEGE[char]
-                    nick_id = Identifier(nick)
-                    current = self.channels[chan_id].privileges.get(nick_id, 0)
-                    if adding:
-                        self.channels[chan_id].privileges[nick_id] = current | priv
-                    else:
-                        self.channels[chan_id].privileges[nick_id] = current & ~priv
-            elif char in 'beIkl':
-                # These modes take a parameter
-                param_idx += 1
 
     def _handle_names(self, params):
         """Handle 353 (RPL_NAMREPLY) for channel population."""
@@ -521,23 +544,24 @@ class IRCBot:
             return
 
         chan_id = Identifier(channel)
-        if chan_id not in self.channels:
-            self.channels[chan_id] = Channel(channel)
+        with self._state_lock:
+            if chan_id not in self.channels:
+                self.channels[chan_id] = Channel(channel)
 
-        for name in names_str.split():
-            if not name:
-                continue
-            # Strip privilege prefix
-            priv = 0
-            while name and name[0] in MODE_TO_PRIVILEGE:
-                priv |= MODE_TO_PRIVILEGE[name[0]]
-                name = name[1:]
-            if name:
-                if Identifier(name) not in self.users:
-                    self.users[Identifier(name)] = User(name)
-                self.users[Identifier(name)].channels.add(chan_id)
-                self.channels[chan_id].add_user(
-                    name, priv, user_obj=self.users[Identifier(name)])
+            for name in names_str.split():
+                if not name:
+                    continue
+                # Strip privilege prefix
+                priv = 0
+                while name and name[0] in MODE_TO_PRIVILEGE:
+                    priv |= MODE_TO_PRIVILEGE[name[0]]
+                    name = name[1:]
+                if name:
+                    if Identifier(name) not in self.users:
+                        self.users[Identifier(name)] = User(name)
+                    self.users[Identifier(name)].channels.add(chan_id)
+                    self.channels[chan_id].add_user(
+                        name, priv, user_obj=self.users[Identifier(name)])
 
     def _handle_topic(self, command, params, prefix):
         """Track channel topic changes."""
@@ -557,10 +581,11 @@ class IRCBot:
     def get_privilege(self, channel, nick):
         """Get a user's privilege level in a channel."""
         chan_id = Identifier(channel)
-        if chan_id in self.channels:
-            return self.channels[chan_id].privileges.get(
-                Identifier(nick), 0)
-        return 0
+        with self._state_lock:
+            if chan_id in self.channels:
+                return self.channels[chan_id].privileges.get(
+                    Identifier(nick), 0)
+            return 0
 
     # --- Main Loop ---
 
@@ -593,11 +618,13 @@ class IRCBot:
         self._connected = False
 
     async def _interval_runner(self, interval_secs, func, plugin_name):
-        """Run a plugin's interval function periodically."""
+        """Run a plugin's interval function periodically with backoff on errors."""
         from ibot.sopel_shim.bot import SopelWrapper
         from ibot.sopel_shim.trigger import PreTrigger, Trigger
 
         await asyncio.sleep(interval_secs)  # Initial delay
+        consecutive_failures = 0
+        
         while self._running:
             try:
                 # Interval functions get bot but no trigger
@@ -610,9 +637,23 @@ class IRCBot:
                 # Run in thread since it may block
                 await asyncio.get_event_loop().run_in_executor(
                     None, func, wrapper)
+                consecutive_failures = 0  # Reset on success
             except Exception:
-                LOGGER.exception("Error in interval job %s.%s",
-                                 plugin_name, func.__name__)
+                consecutive_failures += 1
+                LOGGER.exception("Error in interval job %s.%s (failure %d/%d)",
+                                 plugin_name, func.__name__,
+                                 consecutive_failures, INTERVAL_JOB_MAX_FAILURES)
+                
+                if consecutive_failures >= INTERVAL_JOB_MAX_FAILURES:
+                    LOGGER.error("Disabling interval job %s.%s after %d consecutive failures",
+                                 plugin_name, func.__name__, consecutive_failures)
+                    return
+                
+                # Exponential backoff on errors
+                backoff_delay = min(interval_secs, INTERVAL_JOB_BACKOFF_BASE * (2 ** (consecutive_failures - 1)))
+                await asyncio.sleep(backoff_delay)
+                continue
+                
             await asyncio.sleep(interval_secs)
 
     async def run(self):
@@ -677,7 +718,7 @@ class IRCBot:
                 except asyncio.CancelledError:
                     break
                 self._reconnect_delay = min(
-                    self._reconnect_delay * 2, 300)
+                    self._reconnect_delay * 2, MAX_RECONNECT_DELAY)
             else:
                 break
 
