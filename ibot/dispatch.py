@@ -390,8 +390,29 @@ class Dispatcher:
                 ctcp_cmd = pretrigger.ctcp.upper()
                 if ctcp_cmd in self._ctcp_handlers:
                     for func, pname in self._ctcp_handlers[ctcp_cmd]:
-                        self._dispatch_to_func(
-                            func, pretrigger, pname, event_match=True)
+                        # If handler has rules, check them against the CTCP text
+                        if hasattr(func, '_rules') and func._rules:
+                            ctcp_text = pretrigger.args[-1] if pretrigger.args else ''
+                            matched = False
+                            for rule_pattern in func._rules:
+                                try:
+                                    if isinstance(rule_pattern, str):
+                                        compiled = re.compile(rule_pattern)
+                                    else:
+                                        compiled = rule_pattern
+                                    match = compiled.match(ctcp_text)
+                                    if match:
+                                        self._dispatch_to_func(
+                                            func, pretrigger, pname, match=match)
+                                        matched = True
+                                        break
+                                except (re.error, TypeError):
+                                    LOGGER.error("Bad rule pattern in CTCP handler: %s", rule_pattern)
+                            # If no rules matched, skip this handler
+                        else:
+                            # No rules, dispatch unconditionally
+                            self._dispatch_to_func(
+                                func, pretrigger, pname, event_match=True)
 
                 # Handle action commands
                 if ctcp_cmd == 'ACTION':
