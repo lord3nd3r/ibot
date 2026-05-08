@@ -6,6 +6,7 @@ Provides Identifier, SopelMemory, and other utility classes.
 import re
 import threading
 from collections import OrderedDict
+from typing import Any, Optional, Pattern
 
 
 class Identifier(str):
@@ -44,7 +45,7 @@ class Identifier(str):
     def __hash__(self):
         return hash(Identifier._lower(str(self)))
 
-    def is_nick(self):
+    def is_nick(self) -> bool:
         """Check if this identifier is a nickname (not a channel)."""
         return not str(self).startswith(('#', '&', '+', '!'))
 
@@ -138,7 +139,7 @@ class SopelIdentifierMemory(SopelMemory):
         return super().get(Identifier(key), default)
 
 
-def get_hostmask_regex(mask):
+def get_hostmask_regex(mask: str) -> Pattern:
     """Convert a hostmask pattern (nick!user@host) to a compiled regex."""
     # Escape everything except *
     mask = re.escape(mask)

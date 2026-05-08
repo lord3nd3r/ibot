@@ -10,11 +10,12 @@ import inspect
 import logging
 import os
 import sys
+from typing import List, Optional
 
 LOGGER = logging.getLogger(__name__)
 
 
-def install_sopel_shim():
+def install_sopel_shim() -> None:
     """Install the sopel compatibility shim into sys.modules.
 
     This makes `import sopel`, `from sopel import plugin`, etc. resolve
@@ -92,7 +93,9 @@ class PluginInfo:
         self.shutdown_func = None
 
 
-def load_plugins(plugin_dirs, settings=None, exclude=None, enable=None):
+def load_plugins(plugin_dirs: List[str], settings=None, 
+                 exclude: Optional[List[str]] = None, 
+                 enable: Optional[List[str]] = None) -> List['PluginInfo']:
     """Discover and load all plugins from the given directories.
 
     :param plugin_dirs: list of directories to scan for .py files
@@ -140,7 +143,7 @@ def load_plugins(plugin_dirs, settings=None, exclude=None, enable=None):
     return plugins
 
 
-def _load_plugin_file(name, filepath):
+def _load_plugin_file(name: str, filepath: str) -> Optional['PluginInfo']:
     """Load a single .py plugin file and extract its handlers."""
     spec = importlib.util.spec_from_file_location(
         f'ibot_plugins.{name}', filepath
@@ -196,7 +199,7 @@ def _load_plugin_file(name, filepath):
     return plugin
 
 
-def reload_plugin_file(name, filepath):
+def reload_plugin_file(name: str, filepath: str) -> Optional['PluginInfo']:
     """Reload a single plugin by re-importing its module.
 
     Removes the old module from sys.modules first so the file is
@@ -208,7 +211,7 @@ def reload_plugin_file(name, filepath):
     return _load_plugin_file(name, filepath)
 
 
-def find_plugin_file(name, plugin_dirs):
+def find_plugin_file(name: str, plugin_dirs: List[str]) -> Optional[str]:
     """Find a plugin file by name across all plugin directories.
 
     Returns the full path or None.

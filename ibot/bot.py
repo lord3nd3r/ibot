@@ -14,6 +14,7 @@ import signal
 import ssl
 import threading
 import time
+from typing import Optional
 
 from ibot.sopel_shim.tools import Identifier, SopelMemory, SopelIdentifierMemory
 from ibot.sopel_shim.db import SopelDB

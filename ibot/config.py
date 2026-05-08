@@ -4,10 +4,11 @@ Wraps the sopel_shim config and provides the main config loading interface.
 """
 
 import os
+from typing import Optional
 from ibot.sopel_shim.config import Config
 
 
-def load_config(filename):
+def load_config(filename: str) -> Config:
     """Load an ibot configuration file.
 
     :param filename: path to the INI config file
@@ -18,7 +19,7 @@ def load_config(filename):
     return Config(filename)
 
 
-def create_default_config(filename):
+def create_default_config(filename: str) -> None:
     """Create a default config file if one doesn't exist."""
     if os.path.exists(filename):
         return

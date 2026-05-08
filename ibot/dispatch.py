@@ -8,11 +8,17 @@ import logging
 import re
 import threading
 import time as time_mod
+from typing import Optional, List, Tuple, Pattern
 
 from ibot.sopel_shim.trigger import PreTrigger, Trigger
 from ibot.sopel_shim.bot import SopelWrapper
 
 LOGGER = logging.getLogger(__name__)
+
+# Rate limiting constants (already defined in RateLimitTracker)
+# Dispatcher constants
+MAX_COMMAND_LENGTH = 100  # Maximum command name length
+MAX_RULE_PATTERN_LENGTH = 500  # Maximum regex pattern length
 
 
 class RateLimitTracker:
