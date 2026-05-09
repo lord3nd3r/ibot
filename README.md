@@ -16,8 +16,8 @@ Drop in your Sopel config, database, and scripts — they just work.
 ## Quick Start
 
 ```bash
-# Copy the included default config and name it whatever you want
-cp default.cfg mybot.cfg
+# Generate a fresh config file
+python -m ibot --generate-config mybot.cfg
 
 # Edit it with your server, nick, channels, etc.
 nano mybot.cfg
@@ -27,11 +27,6 @@ python -m ibot mybot.cfg
 
 # Run with debug logging
 python -m ibot -v mybot.cfg
-```
-
-You can also generate a fresh config with:
-```bash
-python -m ibot --generate-config mybot.cfg
 ```
 
 ## Using Your Existing Sopel Setup
