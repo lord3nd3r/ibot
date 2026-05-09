@@ -20,6 +20,7 @@ All commands require owner status.
 from sopel import plugin
 import logging
 import os
+import time
 
 LOGGER = logging.getLogger(__name__)
 
@@ -359,6 +360,43 @@ def bot_part(bot, trigger):
             LOGGER.info("Channel %s was not in persistent list", channel)
     except Exception:
         LOGGER.exception("Failed to remove persistent channel")
+
+
+@plugin.event('KICK')
+@plugin.unblockable
+def on_kick(bot, trigger):
+    """Auto-rejoin when the bot is kicked, if hold_ground is enabled."""
+    if len(trigger.args) < 2:
+        return
+    kicked_nick = trigger.args[1]
+    if kicked_nick.lower() != bot.nick.lower():
+        return
+
+    channel = str(trigger.args[0])
+    hold = bot._bot.settings.option('admin', 'hold_ground', 'false')
+    if str(hold).lower() not in ('true', 'yes', '1', 'on'):
+        return
+
+    LOGGER.info("Kicked from %s, rejoining in 5 seconds (hold_ground=true)", channel)
+    time.sleep(5)
+    bot.join(channel)
+    LOGGER.info("Rejoined %s after kick", channel)
+
+
+@plugin.event('INVITE')
+@plugin.unblockable
+def on_invite(bot, trigger):
+    """Auto-accept channel invites if auto_accept_invite is enabled."""
+    channel = trigger.text
+    if not channel:
+        return
+
+    auto = bot._bot.settings.option('admin', 'auto_accept_invite', 'false')
+    if str(auto).lower() not in ('true', 'yes', '1', 'on'):
+        return
+
+    LOGGER.info("Received invite to %s from %s, joining", channel, trigger.nick)
+    bot.join(channel)
 
 
 # ---- Raw IRC / Messaging ----
