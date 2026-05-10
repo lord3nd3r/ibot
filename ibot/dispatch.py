@@ -222,7 +222,7 @@ class Dispatcher:
 
     def register_plugins(self, plugins):
         """Register all loaded plugins with the dispatcher."""
-        self.plugins = plugins
+        self.plugins.extend(plugins)
         prefix = self.settings.core.prefix
 
         for plugin in plugins:
