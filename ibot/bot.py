@@ -349,6 +349,16 @@ class IRCBot:
         if command == '353' and len(params) >= 3:
             self._handle_names(params)
 
+        # Handle JOIN errors — retry for recoverable failures
+        # 471=full, 473=invite-only, 474=banned, 475=bad key, 477=need registered
+        if command in ('471', '473', '474', '475', '477'):
+            failed_channel = params[1] if len(params) > 1 else '?'
+            reason = ' '.join(params[2:]).lstrip(':') if len(params) > 2 else command
+            LOGGER.warning("Failed to join %s: %s (code %s)", failed_channel, reason, command)
+            # Retry for +R (477) and channel-full (471) after a delay
+            if command in ('477', '471'):
+                asyncio.create_task(self._retry_failed_join(failed_channel, delay=10))
+
         # Handle TOPIC
         if command in ('332', 'TOPIC'):
             self._handle_topic(command, params, prefix)
@@ -400,8 +410,13 @@ class IRCBot:
             if password:
                 await self._send_raw(
                     f'PRIVMSG {target} :IDENTIFY {password}')
+                # Wait for NickServ to process identification before joining
+                # channels. Channels with +R (registered only) will reject
+                # JOINs until identification is complete.
+                LOGGER.info("Waiting for NickServ identification before joining channels...")
+                await asyncio.sleep(5)
 
-        # Join configured channels
+        # Collect all channels to join
         config_channels = self.settings.core.channels
         LOGGER.info("Config channels (raw): %r", config_channels)
         LOGGER.info("Config channels (type): %s", type(config_channels))
@@ -425,13 +440,23 @@ class IRCBot:
             LOGGER.exception("Failed to load persistent channels from DB")
 
         LOGGER.info("Total channels to join: %d - %s", len(channels), sorted(channels))
+        self._pending_joins = set()
         for channel in sorted(channels):
             channel = channel.strip()
             if channel:
+                self._pending_joins.add(channel.lower())
                 await self._send_raw(f'JOIN {channel}')
                 LOGGER.info("Joining %s", channel)
             else:
                 LOGGER.warning("Skipping empty channel string")
+
+    async def _retry_failed_join(self, channel, delay=10):
+        """Retry a failed JOIN after a delay."""
+        LOGGER.info("Will retry joining %s in %d seconds", channel, delay)
+        await asyncio.sleep(delay)
+        if self._running and self._connected:
+            LOGGER.info("Retrying JOIN %s", channel)
+            await self._send_raw(f'JOIN {channel}')
 
     # --- Channel/User Tracking ---
 
