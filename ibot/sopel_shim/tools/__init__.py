@@ -157,18 +157,9 @@ def chain_loaders(*loaders):
     return combined_loader
 
 
-class web:
-    """Web-related utility methods."""
-
-    _url_regex = re.compile(
-        r'(?:https?|ftp)://[^\s<>\'")\]]+',
-        re.IGNORECASE,
-    )
-
-    @staticmethod
-    def search_urls(text, schemes=None):
-        """Find URLs in text."""
-        return web._url_regex.findall(text)
+# Re-export the real tools.web module so `from sopel.tools import web`
+# and `import sopel.tools.web` resolve to the same object.
+from ibot.sopel_shim.tools import web  # noqa: E402
 
 
 class events:

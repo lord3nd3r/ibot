@@ -9,6 +9,9 @@ import logging
 
 LOGGER = logging.getLogger(__name__)
 
+# Conservative per-PRIVMSG body limit (bytes), matching the core bot.
+_MAX_MESSAGE_BYTES = 400
+
 
 class SopelWrapper:
     """The bot object passed to plugin callables.
@@ -21,7 +24,7 @@ class SopelWrapper:
         self._bot = bot
         self._trigger = trigger
         self._default_destination = (
-            str(trigger.sender) if trigger.sender else None
+            str(trigger.sender) if trigger and trigger.sender else None
         )
         self._output_prefix = ''
 
@@ -30,31 +33,124 @@ class SopelWrapper:
             return self._output_prefix + text
         return text
 
-    def say(self, text, destination=None, max_messages=None, truncation=None, trailing=None):
-        """Send a PRIVMSG to the destination (defaults to trigger's sender)."""
+    @staticmethod
+    def _split_chunks(text, max_bytes=_MAX_MESSAGE_BYTES):
+        """Split text into byte-safe chunks, also honouring embedded newlines.
+
+        Yields non-empty chunks in order. Newlines force a chunk boundary;
+        long lines are further split on character boundaries so UTF-8 is never
+        cut mid-codepoint.
+        """
+        # Prefer the core bot's byte-aware splitter when available.
+        splitter = None
+        # Imported lazily to avoid circular imports at module load.
+        try:
+            from ibot.bot import IRCBot
+            splitter = IRCBot._split_message
+        except Exception:
+            splitter = None
+
+        for line in str(text).split('\n'):
+            if not line:
+                continue
+            if splitter is not None:
+                for chunk in splitter(line, max_bytes):
+                    if chunk:
+                        yield chunk
+            else:
+                # Fallback byte-aware split
+                encoded = line.encode('utf-8')
+                if len(encoded) <= max_bytes:
+                    yield line
+                    continue
+                chunk = []
+                chunk_bytes = 0
+                for ch in line:
+                    ch_bytes = len(ch.encode('utf-8'))
+                    if chunk_bytes + ch_bytes > max_bytes and chunk:
+                        yield ''.join(chunk)
+                        chunk = []
+                        chunk_bytes = 0
+                    chunk.append(ch)
+                    chunk_bytes += ch_bytes
+                if chunk:
+                    yield ''.join(chunk)
+
+    def say(self, text, destination=None, max_messages=None,
+            truncation=None, trailing=None):
+        """Send a PRIVMSG to the destination (defaults to trigger's sender).
+
+        ``max_messages`` caps the number of PRIVMSG lines actually sent
+        (counting both newline splits *and* byte-length splits). Extra content
+        is dropped; when truncation occurs the last sent message may be
+        modified by ``truncation`` / ``trailing`` (Sopel semantics).
+        """
         dest = destination or self._default_destination
         if not dest:
             LOGGER.warning("No destination for say()")
             return
+
         text = self._prefix(text)
-        # Handle multi-line and message splitting
-        lines = str(text).split('\n')
-        max_msgs = max_messages or 5
-        for i, line in enumerate(lines):
-            if i >= max_msgs:
-                break
-            if line.strip():
-                self._bot.send_privmsg(dest, line)
+        # Sopel default is 1; keep that for plugin compatibility.
+        if max_messages is None:
+            max_messages = 1
+        if max_messages < 1:
+            return
+
+        chunks = list(self._split_chunks(text))
+        if not chunks:
+            return
+
+        truncated = len(chunks) > max_messages
+        to_send = chunks[:max_messages]
+
+        if truncated:
+            last = to_send[-1]
+            # Append optional truncation marker / trailing text.
+            suffix = ''
+            if truncation:
+                suffix += str(truncation)
+            if trailing:
+                suffix += str(trailing)
+            if suffix:
+                # Fit suffix within the byte budget of the last message.
+                max_body = _MAX_MESSAGE_BYTES - len(suffix.encode('utf-8'))
+                if max_body < 0:
+                    max_body = 0
+                encoded = last.encode('utf-8')
+                if len(encoded) > max_body:
+                    # Trim on character boundaries.
+                    trimmed = []
+                    nbytes = 0
+                    for ch in last:
+                        cb = len(ch.encode('utf-8'))
+                        if nbytes + cb > max_body:
+                            break
+                        trimmed.append(ch)
+                        nbytes += cb
+                    last = ''.join(trimmed)
+                to_send[-1] = last + suffix
+
+        for chunk in to_send:
+            # Use send_raw-style single-chunk send to avoid double-splitting.
+            if hasattr(self._bot, 'send_privmsg_chunk'):
+                self._bot.send_privmsg_chunk(dest, chunk)
+            else:
+                self._bot.send_privmsg(dest, chunk)
 
     def reply(self, text, destination=None, reply_to=None, notice=False):
         """Reply to the user who triggered the command."""
         dest = destination or self._default_destination
-        nick = reply_to or str(self._trigger.nick)
+        nick = reply_to or (
+            str(self._trigger.nick) if self._trigger is not None else ''
+        )
         text = self._prefix(text)
+        msg = f"{nick}: {text}" if nick else text
         if notice:
-            self._bot.send_notice(f"{nick}: {text}", dest)
+            if dest:
+                self._bot.send_notice(msg, dest)
         elif dest:
-            self._bot.send_privmsg(dest, f"{nick}: {text}")
+            self.say(msg, destination=dest)
 
     def notice(self, text, destination=None):
         """Send a NOTICE."""
@@ -68,7 +164,10 @@ class SopelWrapper:
         dest = destination or self._default_destination
         if dest:
             text = self._prefix(text)
-            self._bot.send_privmsg(dest, f'\x01ACTION {text}\x01')
+            if hasattr(self._bot, 'send_privmsg_chunk'):
+                self._bot.send_privmsg_chunk(dest, f'\x01ACTION {text}\x01')
+            else:
+                self._bot.send_privmsg(dest, f'\x01ACTION {text}\x01')
 
     def kick(self, nick, channel=None, text=None):
         """Kick a user from a channel."""

@@ -47,6 +47,10 @@ def install_sopel_shim() -> None:
     sys.modules['sopel.formatting'] = formatting
     sys.modules['sopel.privileges'] = privileges
 
+    # Keep attribute access and import paths on the same objects.
+    tools.web = tools_web
+    tools.time = tools_time
+
     # Expose sopel.tools.target (live User/Channel state objects).
     # Imported here (not at package import time) to avoid a circular import
     # with ibot.bot.
