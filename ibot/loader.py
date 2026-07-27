@@ -47,6 +47,13 @@ def install_sopel_shim() -> None:
     sys.modules['sopel.formatting'] = formatting
     sys.modules['sopel.privileges'] = privileges
 
+    # Expose sopel.tools.target (live User/Channel state objects).
+    # Imported here (not at package import time) to avoid a circular import
+    # with ibot.bot.
+    from ibot.sopel_shim import target as target_mod
+    sys.modules['sopel.tools.target'] = target_mod
+    tools.target = target_mod
+
     # Create a tools.identifiers alias pointing to tools (Identifier lives there)
     identifiers_mod = ModuleType('sopel.tools.identifiers')
     identifiers_mod.Identifier = tools.Identifier
