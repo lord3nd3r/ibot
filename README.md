@@ -100,6 +100,7 @@ def hello(bot, trigger):
 | `@plugin.ctcp()` / `@plugin.intent()` | ✅ |
 | `@plugin.require_admin` / `require_owner` / `require_chanmsg` | ✅ |
 | `@plugin.require_privmsg` / `require_privilege` / `require_account` | ✅ |
+| `@plugin.require_bot_privilege` | ✅ |
 | `@plugin.rate()` / `thread()` / `priority()` / `unblockable` | ✅ |
 | `@plugin.example()` / `output_prefix()` | ✅ |
 | **Bot Object** | |
@@ -109,6 +110,7 @@ def hello(bot, trigger):
 | `bot.db` (SQLAlchemy — full Sopel schema) | ✅ |
 | `bot.memory` (SopelMemory) | ✅ |
 | `bot.channels` / `bot.users` | ✅ |
+| `sopel.tools.target` (`User` / `Channel`, `is_op()`/`is_voiced()`/…) | ✅ |
 | **Trigger Object** | |
 | `trigger.nick` / `.sender` / `.host` / `.account` | ✅ |
 | `trigger.group()` / `.match` / `.args` / `.tags` | ✅ |
