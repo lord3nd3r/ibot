@@ -53,6 +53,8 @@ class User:
         self.user = user or ''
         self.host = host or ''
         self.account = None
+        self.realname = ''
+        self.away = None
         self.channels = set()
 
     @property
@@ -72,6 +74,22 @@ class Channel:
     def has_privilege(self, nick, privilege):
         priv = self.privileges.get(nick, 0)
         return priv >= privilege
+
+    # Sopel-compatible per-level checks (bitmask, like sopel.tools.target).
+    def is_voiced(self, nick):
+        return bool(self.privileges.get(nick, 0) & VOICE)
+
+    def is_halfop(self, nick):
+        return bool(self.privileges.get(nick, 0) & HALFOP)
+
+    def is_op(self, nick):
+        return bool(self.privileges.get(nick, 0) & OP)
+
+    def is_admin(self, nick):
+        return bool(self.privileges.get(nick, 0) & ADMIN)
+
+    def is_owner(self, nick):
+        return bool(self.privileges.get(nick, 0) & OWNER)
 
     def add_user(self, nick, privilege=0, user_obj=None):
         nick_id = Identifier(nick)

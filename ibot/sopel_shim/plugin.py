@@ -19,7 +19,8 @@ __all__ = [
     'nickname_command', 'nickname_commands',
     'action_command', 'action_commands',
     'require_admin', 'require_owner', 'require_chanmsg',
-    'require_privmsg', 'require_privilege', 'require_account',
+    'require_privmsg', 'require_privilege', 'require_bot_privilege',
+    'require_account',
     'rate', 'rate_user', 'rate_channel', 'rate_global',
     'thread', 'priority', 'unblockable', 'allow_bots', 'echo',
     'example', 'output_prefix', 'label',
@@ -357,6 +358,36 @@ def require_privilege(level, message=None, reply=False):
                 if trigger.admin:
                     return True
             if message:
+                if reply:
+                    bot.reply(message)
+                else:
+                    bot.say(message)
+            return False
+
+        func._predicates.append(predicate)
+        return func
+
+    return decorator
+
+
+def require_bot_privilege(level, message=None, reply=False):
+    """Restrict a function to run only when the bot has a channel privilege.
+
+    In a private message the check is skipped (the function runs), matching
+    Sopel's behaviour. In a channel, the bot must hold at least ``level``.
+    """
+    def decorator(func):
+        func = _ensure_attrs(func)
+
+        def predicate(bot, trigger):
+            channel = trigger.sender
+            # Not in a channel (PM): the privilege check does not apply.
+            if channel is None or channel.is_nick():
+                return True
+            if hasattr(bot, 'has_channel_privilege'):
+                if bot.has_channel_privilege(channel, level):
+                    return True
+            if message and not callable(message):
                 if reply:
                     bot.reply(message)
                 else:
