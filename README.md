@@ -101,16 +101,20 @@ def hello(bot, trigger):
 | `@plugin.require_admin` / `require_owner` / `require_chanmsg` | ✅ |
 | `@plugin.require_privmsg` / `require_privilege` / `require_account` | ✅ |
 | `@plugin.require_bot_privilege` | ✅ |
-| `@plugin.rate()` / `thread()` / `priority()` / `unblockable` | ✅ |
+| `@plugin.rate()` / `thread()` / `priority()` | ✅ |
+| `@plugin.unblockable` / `allow_bots` / `echo` | ✅ |
 | `@plugin.example()` / `output_prefix()` | ✅ |
 | **Bot Object** | |
-| `bot.say()` / `reply()` / `notice()` / `action()` | ✅ |
+| `bot.say()` (max_messages / truncation / trailing) / `reply()` / `notice()` / `action()` | ✅ |
 | `bot.kick()` / `join()` / `part()` / `write()` | ✅ |
 | `bot.nick` / `bot.settings` / `bot.config` | ✅ |
-| `bot.db` (SQLAlchemy — full Sopel schema) | ✅ |
+| `bot.db` (SQLAlchemy — Sopel schema + `get_*_values` bulk) | ✅ |
 | `bot.memory` (SopelMemory) | ✅ |
-| `bot.channels` / `bot.users` | ✅ |
+| `bot.channels` / `bot.users` (account + is_bot tracking) | ✅ |
 | `sopel.tools.target` (`User` / `Channel`, `is_op()`/`is_voiced()`/…) | ✅ |
+| `sopel.tools.web` (`search_urls` / `quote` / `get` / `decode` / …) | ✅ |
+| IRCv3 `account-tag` / `extended-join` / `multi-prefix` / `server-time` | ✅ |
+| `nick_blocks` / `host_blocks` ignore lists | ✅ |
 | **Trigger Object** | |
 | `trigger.nick` / `.sender` / `.host` / `.account` | ✅ |
 | `trigger.group()` / `.match` / `.args` / `.tags` | ✅ |

@@ -308,6 +308,17 @@ class SopelDB:
                 return _deserialize(result.value)
             return default
 
+    def get_nick_values(self, nick):
+        """Return all key/value pairs stored for a nick as a dict."""
+        slug = self.make_identifier(nick).lower()
+        with self.session() as session:
+            rows = session.execute(
+                select(NickValues)
+                .where(Nicknames.nick_id == NickValues.nick_id)
+                .where(Nicknames.slug == slug)
+            ).scalars().all()
+            return {row.key: _deserialize(row.value) for row in rows}
+
     def delete_nick_value(self, nick, key):
         """Delete a value for a nick."""
         try:
@@ -361,6 +372,16 @@ class SopelDB:
                 return _deserialize(result.value)
             return default
 
+    def get_channel_values(self, channel):
+        """Return all key/value pairs stored for a channel as a dict."""
+        channel = self.get_channel_slug(channel)
+        with self.session() as session:
+            rows = session.execute(
+                select(ChannelValues)
+                .where(ChannelValues.channel == channel)
+            ).scalars().all()
+            return {row.key: _deserialize(row.value) for row in rows}
+
     def delete_channel_value(self, channel, key):
         """Delete a value for a channel."""
         channel = self.get_channel_slug(channel)
@@ -412,6 +433,16 @@ class SopelDB:
             if result is not None:
                 return _deserialize(result.value)
             return default
+
+    def get_plugin_values(self, plugin):
+        """Return all key/value pairs stored for a plugin as a dict."""
+        plugin = plugin.lower()
+        with self.session() as session:
+            rows = session.execute(
+                select(PluginValues)
+                .where(PluginValues.plugin == plugin)
+            ).scalars().all()
+            return {row.key: _deserialize(row.value) for row in rows}
 
     def delete_plugin_value(self, plugin, key):
         """Delete a value for a plugin."""

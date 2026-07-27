@@ -55,6 +55,7 @@ class User:
         self.account = None
         self.realname = ''
         self.away = None
+        self.is_bot = False  # set from bot-mode / message tags when available
         self.channels = set()
 
     @property
@@ -141,9 +142,15 @@ class IRCBot:
         self._flood_refill = settings.core.flood_refill or 1
         self._last_refill = time.time()
 
-        # SASL
+        # SASL / CAP
         self._sasl_in_progress = False
         self._cap_negotiating = False
+        self._requested_caps = set()
+        self._enabled_caps = set()
+        self._sasl_wanted = bool(
+            settings.core.auth_method
+            and settings.core.auth_method.lower() == 'sasl'
+        )
 
         # Dispatcher (set after construction)
         self.dispatcher = None
@@ -206,7 +213,15 @@ class IRCBot:
         """Send a PRIVMSG (thread-safe)."""
         # Split long messages (512 bytes max per IRC line minus overhead)
         for chunk in self._split_message(text):
-            self.send_raw(f'PRIVMSG {target} :{chunk}')
+            self.send_privmsg_chunk(target, chunk)
+
+    def send_privmsg_chunk(self, target, text):
+        """Send a single PRIVMSG body without further splitting.
+
+        Used by SopelWrapper.say() after it has already applied max_messages
+        and truncation so chunks are not re-split and re-counted.
+        """
+        self.send_raw(f'PRIVMSG {target} :{text}')
 
     @staticmethod
     def _split_message(text, max_bytes=MAX_MESSAGE_LENGTH):
@@ -272,17 +287,30 @@ class IRCBot:
     # --- IRC Protocol ---
 
     async def register(self):
-        """Send NICK and USER to register with the server."""
-        auth_method = self.settings.core.auth_method
+        """Send NICK and USER to register with the server.
 
-        if auth_method and auth_method.lower() == 'sasl':
-            self._cap_negotiating = True
-            await self._send_raw('CAP REQ :sasl')
+        Always negotiates useful IRCv3 capabilities (account-tag,
+        extended-join, multi-prefix, server-time). Requests SASL when
+        configured. Ends CAP after ACK (and after SASL completes if used).
+        """
+        self._cap_negotiating = True
+        self._requested_caps = {
+            'account-tag',
+            'extended-join',
+            'multi-prefix',
+            'server-time',
+        }
+        if self._sasl_wanted:
+            self._requested_caps.add('sasl')
+
+        # CAP REQ is fine without a prior LS for the caps we care about;
+        # servers NAK unknown ones and we continue.
+        await self._send_raw(
+            'CAP REQ :' + ' '.join(sorted(self._requested_caps)))
 
         await self._send_raw(f'NICK {self.nick}')
         await self._send_raw(
             f'USER {self.nick} 0 * :{self.nick} - ibot')
-
     async def _handle_line(self, line):
         """Process a single line from the server."""
         line = line.strip()
@@ -355,9 +383,28 @@ class IRCBot:
         # Handle JOIN for channel/user tracking
         if command == 'JOIN' and prefix:
             nick = prefix.split('!')[0]
+            # params may include extended-join: channel [account [realname]]
             channel = params[0].lstrip(':') if params else None
+            account = None
+            realname = ''
+            if len(params) >= 2:
+                # extended-join: account is params[1], realname trailing
+                acct = params[1].lstrip(':')
+                if acct and acct != '*':
+                    account = acct
+            if len(params) >= 3:
+                realname = ' '.join(params[2:]).lstrip(':')
             if channel:
-                self._track_join(nick, channel)
+                self._track_join(nick, channel, account=account,
+                                 realname=realname, prefix=prefix)
+
+        # ACCOUNT message (account-notify / some networks after account-tag)
+        if command == 'ACCOUNT' and prefix:
+            nick = prefix.split('!')[0]
+            account = params[0].lstrip(':') if params else None
+            if account == '*':
+                account = None
+            self._track_account(nick, account)
 
         # Handle PART
         if command == 'PART' and prefix:
@@ -377,7 +424,6 @@ class IRCBot:
             new_nick = params[0].lstrip(':') if params else None
             if new_nick:
                 self._track_nick_change(old_nick, new_nick)
-
         # Handle KICK
         if command == 'KICK' and len(params) >= 2:
             channel = params[0]
@@ -415,20 +461,41 @@ class IRCBot:
         if len(params) < 2:
             return
 
-        subcommand = params[1].upper()
+        # CAP replies look like: * ACK :cap1 cap2   or  nick ACK :...
+        subcommand = params[1].upper() if len(params) >= 2 else ''
+        # Some servers put the subcommand in params[1], caps in trailing.
+        # When nick is omitted mid-registration, params[0] may be '*'.
+        if subcommand not in ('ACK', 'NAK', 'LS', 'NEW', 'DEL', 'LIST'):
+            # Format: CAP * ACK :caps  -> params = ['*', 'ACK', ':caps...']
+            # already handled. Alternate: CAP ACK :caps with 2 params.
+            if len(params) >= 2 and params[0].upper() in (
+                    'ACK', 'NAK', 'LS', 'NEW', 'DEL', 'LIST'):
+                subcommand = params[0].upper()
+                cap_list = ' '.join(params[1:]).lstrip(':').split()
+            else:
+                return
+        else:
+            cap_list = ' '.join(params[2:]).lstrip(':').split()
 
         if subcommand == 'ACK':
-            cap_list = ' '.join(params[2:]).lstrip(':').split()
-            if 'sasl' in cap_list:
+            for cap in cap_list:
+                cap = cap.lstrip('-')
+                if cap:
+                    self._enabled_caps.add(cap)
+            LOGGER.info("CAP ACK: %s", ' '.join(cap_list) or '(none)')
+            if 'sasl' in self._enabled_caps and self._sasl_wanted:
                 self._sasl_in_progress = True
                 await self._send_raw('AUTHENTICATE PLAIN')
-
-        elif subcommand == 'NAK':
-            LOGGER.warning("CAP NAK received")
-            if self._cap_negotiating:
+            elif self._cap_negotiating and not self._sasl_in_progress:
                 await self._send_raw('CAP END')
                 self._cap_negotiating = False
 
+        elif subcommand == 'NAK':
+            LOGGER.warning("CAP NAK: %s", ' '.join(cap_list) or '(none)')
+            # Still try SASL only if explicitly ACKed; otherwise end CAP.
+            if self._cap_negotiating and not self._sasl_in_progress:
+                await self._send_raw('CAP END')
+                self._cap_negotiating = False
     async def _handle_authenticate(self, params):
         """Handle SASL AUTHENTICATE challenge."""
         if params and params[0] == '+':
@@ -503,7 +570,7 @@ class IRCBot:
 
     # --- Channel/User Tracking ---
 
-    def _track_join(self, nick, channel):
+    def _track_join(self, nick, channel, account=None, realname='', prefix=None):
         """Track a user joining a channel."""
         nick_id = Identifier(nick)
         chan_id = Identifier(channel)
@@ -514,11 +581,37 @@ class IRCBot:
                     self.channels[chan_id] = Channel(channel)
 
             if nick_id not in self.users:
-                self.users[nick_id] = User(nick)
+                user_obj = User(nick)
+                if prefix and '!' in prefix:
+                    rest = prefix.split('!', 1)[1]
+                    if '@' in rest:
+                        user_obj.user, user_obj.host = rest.split('@', 1)
+                    else:
+                        user_obj.user = rest
+                self.users[nick_id] = user_obj
+            if account is not None:
+                self.users[nick_id].account = account
+            if realname:
+                self.users[nick_id].realname = realname
             self.users[nick_id].channels.add(chan_id)
 
             if chan_id in self.channels:
-                self.channels[chan_id].add_user(nick, user_obj=self.users[nick_id])
+                self.channels[chan_id].add_user(
+                    nick, user_obj=self.users[nick_id])
+    def _track_account(self, nick, account):
+        """Update a user's services account (ACCOUNT / account-tag)."""
+        nick_id = Identifier(nick)
+        with self._state_lock:
+            if nick_id not in self.users:
+                self.users[nick_id] = User(nick)
+            self.users[nick_id].account = account
+
+    def get_user_account(self, nick):
+        """Return the tracked services account for nick, or None."""
+        nick_id = Identifier(nick)
+        with self._state_lock:
+            user = self.users.get(nick_id)
+            return user.account if user else None
 
     def _track_part(self, nick, channel):
         """Track a user leaving a channel."""

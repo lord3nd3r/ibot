@@ -219,3 +219,13 @@ class CoreSection:
     @property
     def reconnect_on_disconnect(self):
         return self._getbool('reconnect_on_disconnect', True)
+
+    @property
+    def host_blocks(self):
+        """Hostmasks to ignore (Sopel-compatible). Supports * wildcards."""
+        return self._getlist('host_blocks', [])
+
+    @property
+    def nick_blocks(self):
+        """Nicks to ignore (Sopel-compatible). Case-insensitive exact match."""
+        return self._getlist('nick_blocks', [])

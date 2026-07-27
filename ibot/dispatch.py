@@ -21,6 +21,18 @@ LOGGER = logging.getLogger(__name__)
 MAX_COMMAND_LENGTH = 100  # Maximum command name length
 MAX_RULE_PATTERN_LENGTH = 500  # Maximum regex pattern length
 
+# Sopel priority ordering (lower runs first)
+_PRIORITY_RANK = {
+    'high': 0,
+    'medium': 1,
+    'low': 2,
+}
+
+
+def _handler_priority(func):
+    return _PRIORITY_RANK.get(
+        getattr(func, '_priority', 'medium') or 'medium', 1)
+
 
 class RateLimitTracker:
     """Tracks rate limit timestamps per user/channel/global."""
@@ -123,6 +135,9 @@ class Dispatcher:
         self.settings = settings
         self.plugins = []
         self._rate_limiter = RateLimitTracker()
+        self._ignore_nicks = set()
+        self._ignore_hostmasks = []  # compiled regexes
+        self._rebuild_ignore_lists()
 
         # Compiled command patterns: [(compiled_regex, func, plugin_name)]
         self._command_handlers = []
@@ -144,6 +159,65 @@ class Dispatcher:
         self._url_handlers = []
         # Interval jobs
         self._interval_jobs = []
+
+    def _rebuild_ignore_lists(self):
+        """Compile nick_blocks / host_blocks from config."""
+        from ibot.sopel_shim.tools import get_hostmask_regex, Identifier
+        core = self.settings.core
+        self._ignore_nicks = {
+            Identifier(n).lower() for n in (core.nick_blocks or [])
+        }
+        self._ignore_hostmasks = []
+        for mask in (core.host_blocks or []):
+            try:
+                self._ignore_hostmasks.append(get_hostmask_regex(mask))
+            except re.error:
+                LOGGER.error("Bad host_blocks pattern: %s", mask)
+
+    def _is_ignored(self, pretrigger):
+        """True if the sender is on the ignore list."""
+        from ibot.sopel_shim.tools import Identifier
+        nick = Identifier(pretrigger.nick).lower()
+        if nick in self._ignore_nicks:
+            return True
+        hostmask = pretrigger.hostmask or ''
+        for regex in self._ignore_hostmasks:
+            if regex.match(hostmask):
+                return True
+        return False
+
+    def _is_bot_user(self, pretrigger):
+        """Best-effort bot detection (message tag or tracked User.is_bot)."""
+        tags = pretrigger.tags or {}
+        if 'bot' in tags:
+            return True
+        if hasattr(self.bot, 'users'):
+            user = self.bot.users.get(pretrigger.nick)
+            if user is not None and getattr(user, 'is_bot', False):
+                return True
+        return False
+
+    def _sort_handlers(self):
+        """Sort list-style handlers by Sopel priority (high → medium → low)."""
+        def key3(item):
+            # (compiled, func, plugin) or (interval, func, plugin)
+            return (_handler_priority(item[1]), item[2], getattr(item[1], '__name__', ''))
+
+        def key2(item):
+            # (func, plugin)
+            return (_handler_priority(item[0]), item[1], getattr(item[0], '__name__', ''))
+
+        self._command_handlers.sort(key=key3)
+        self._rule_handlers.sort(key=key3)
+        self._nick_command_handlers.sort(key=key3)
+        self._action_command_handlers.sort(key=key3)
+        self._find_handlers.sort(key=key3)
+        self._search_handlers.sort(key=key3)
+        self._url_handlers.sort(key=key3)
+        for evt in self._event_handlers:
+            self._event_handlers[evt].sort(key=key2)
+        for ctcp in self._ctcp_handlers:
+            self._ctcp_handlers[ctcp].sort(key=key2)
 
     def clear(self):
         """Clear all registered handlers (for rehash/full reload)."""
@@ -346,6 +420,8 @@ class Dispatcher:
                 for iv in func._intervals:
                     self._interval_jobs.append((iv, func, plugin_name))
 
+        self._sort_handlers()
+
         total_commands = len(self._command_handlers)
         total_rules = len(self._rule_handlers)
         total_events = sum(len(v) for v in self._event_handlers.values())
@@ -467,13 +543,50 @@ class Dispatcher:
         if match is None:
             return
 
+        # Echo filter: skip the bot's own messages unless @echo
+        bot_nick = getattr(self.bot, 'nick', None)
+        if bot_nick and str(pretrigger.nick).lower() == str(bot_nick).lower():
+            if not getattr(func, '_allow_echo', False):
+                return
+
+        # Ignore list (unless @unblockable)
+        if not getattr(func, '_unblockable', False):
+            if self._is_ignored(pretrigger):
+                return
+
+        # Other bots (unless @allow_bots)
+        if not getattr(func, '_allow_bots', False):
+            if self._is_bot_user(pretrigger):
+                return
+
         # Check if this plugin is disabled in this channel
         channel = pretrigger.sender
-        if channel and channel.startswith(('#', '&')):
+        if channel and str(channel).startswith(('#', '&')):
             if self._is_plugin_disabled(channel, plugin_name):
                 return
 
-        trigger = Trigger(self.settings, pretrigger, match)
+        # Prefer account-tag / extended-join tag; fall back to tracked User.account
+        account = pretrigger.tags.get('account') if pretrigger.tags else None
+        if not account and hasattr(self.bot, 'get_user_account'):
+            account = self.bot.get_user_account(pretrigger.nick)
+        elif not account and hasattr(self.bot, 'users'):
+            user = self.bot.users.get(pretrigger.nick)
+            if user is not None:
+                account = getattr(user, 'account', None)
+
+        # Keep tracked state warm from account-tag
+        if account and hasattr(self.bot, '_track_account'):
+            try:
+                self.bot._track_account(pretrigger.nick, account)
+            except Exception:
+                pass
+        # Bot tag on message
+        if pretrigger.tags and 'bot' in pretrigger.tags and hasattr(self.bot, 'users'):
+            user = self.bot.users.get(pretrigger.nick)
+            if user is not None:
+                user.is_bot = True
+
+        trigger = Trigger(self.settings, pretrigger, match, account=account)
 
         # Check predicates (require_admin, require_chanmsg, etc.)
         wrapper = SopelWrapper(self.bot, trigger)
@@ -518,7 +631,6 @@ class Dispatcher:
             t.start()
         else:
             _run()
-
     def _is_plugin_disabled(self, channel, plugin_name):
         """Check if a plugin is disabled in a channel via memory cache."""
         # The admin plugin can never be disabled

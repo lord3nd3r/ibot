@@ -16,6 +16,32 @@ COMMANDS_WITH_CONTEXT = frozenset({
     'NOTICE', 'PART', 'PRIVMSG', 'TOPIC',
 })
 
+# IRCv3 tag value escapes (message-tags)
+_TAG_UNESCAPE = {
+    ':': ';',
+    's': ' ',
+    '\\': '\\',
+    'r': '\r',
+    'n': '\n',
+}
+
+
+def unescape_tag_value(value):
+    """Decode an IRCv3 tag value (\\: \\s \\\\ \\r \\n)."""
+    if value is None:
+        return None
+    out = []
+    i = 0
+    while i < len(value):
+        if value[i] == '\\' and i + 1 < len(value):
+            nxt = value[i + 1]
+            out.append(_TAG_UNESCAPE.get(nxt, nxt))
+            i += 2
+        else:
+            out.append(value[i])
+            i += 1
+    return ''.join(out)
+
 
 class PreTrigger:
     """A parsed raw IRC message, before rule matching.
@@ -36,16 +62,18 @@ class PreTrigger:
         self.ctcp = None
         self.status_prefix = None
 
-        # Parse IRCv3 message tags
+        # Parse IRCv3 message tags (with unescaping)
         self.tags = {}
         if line.startswith('@'):
             tagstring, line = line.split(' ', 1)
             for raw_tag in tagstring[1:].split(';'):
-                tag = raw_tag.split('=', 1)
-                if len(tag) > 1:
-                    self.tags[tag[0]] = tag[1]
+                if not raw_tag:
+                    continue
+                if '=' in raw_tag:
+                    key, raw_val = raw_tag.split('=', 1)
+                    self.tags[key] = unescape_tag_value(raw_val)
                 else:
-                    self.tags[tag[0]] = None
+                    self.tags[raw_tag] = None
 
         # Timestamp
         self.time = datetime.now(timezone.utc)
@@ -56,7 +84,13 @@ class PreTrigger:
                     tag_time, "%Y-%m-%dT%H:%M:%S.%fZ"
                 ).replace(tzinfo=timezone.utc)
             except ValueError:
-                pass
+                # Also accept seconds-only form
+                try:
+                    self.time = datetime.strptime(
+                        tag_time, "%Y-%m-%dT%H:%M:%SZ"
+                    ).replace(tzinfo=timezone.utc)
+                except ValueError:
+                    pass
 
         # Parse hostmask
         self.hostmask = None
@@ -102,9 +136,13 @@ class PreTrigger:
             # Search for URLs
             self.urls = tuple(web.search_urls(self.args[-1]))
 
-        # Handle extended-join account info
-        if self.event == 'JOIN' and len(self.args) == 3:
-            self.tags['account'] = self.args[1]
+        # Handle extended-join account info: JOIN #chan account :realname
+        # (args after event strip: [channel, account, realname] or [channel])
+        if self.event == 'JOIN' and len(self.args) >= 2:
+            # extended-join: channel, account, realname
+            account = self.args[1]
+            if account and account != '*':
+                self.tags.setdefault('account', account)
 
         # Plain text (stripped of formatting)
         if self.args:
