@@ -514,7 +514,7 @@ Suggested workflow for plugin work:
 
 ## Project status
 
-ibot is **beta (0.1.0)**. The compatibility surface is intentionally broad and under active use for running Sopel-style plugins, but edge-case parity with every Sopel release is not guaranteed. Prefer the test suite and a staging network before production cutover.
+ibot is **1.0.0** — feature-complete enough to call a real release, still **somewhat beta** in spirit. The Sopel compatibility surface is broad and under active use, but edge-case parity with every Sopel release is not guaranteed. Prefer the test suite and a staging network before production cutover.
 
 ---
 
