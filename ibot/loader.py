@@ -177,7 +177,7 @@ def _load_plugin_file(name: str, filepath: str) -> Optional['PluginInfo']:
 
         if getattr(obj, '_commands', []):
             plugin.commands.append(obj)
-        if getattr(obj, '_rules', []):
+        if getattr(obj, '_rules', []) or getattr(obj, '_rules_lazy_loaders', []):
             plugin.rules.append(obj)
         if getattr(obj, '_events', []):
             plugin.events.append(obj)
@@ -187,11 +187,11 @@ def _load_plugin_file(name: str, filepath: str) -> Optional['PluginInfo']:
             plugin.action_commands.append(obj)
         if getattr(obj, '_intervals', []):
             plugin.intervals.append(obj)
-        if getattr(obj, '_url_regex', []):
+        if getattr(obj, '_url_regex', []) or getattr(obj, '_url_lazy_loaders', []):
             plugin.url_callbacks.append(obj)
-        if getattr(obj, '_find_rules', []):
+        if getattr(obj, '_find_rules', []) or getattr(obj, '_find_rules_lazy_loaders', []):
             plugin.find_rules.append(obj)
-        if getattr(obj, '_search_rules', []):
+        if getattr(obj, '_search_rules', []) or getattr(obj, '_search_rules_lazy_loaders', []):
             plugin.search_rules.append(obj)
         if getattr(obj, '_ctcp', []):
             plugin.ctcp_handlers.append(obj)

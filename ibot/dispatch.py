@@ -12,6 +12,7 @@ from typing import Optional, List, Tuple, Pattern
 
 from ibot.sopel_shim.trigger import PreTrigger, Trigger
 from ibot.sopel_shim.bot import SopelWrapper
+from ibot.sopel_shim.plugin import NOLIMIT
 
 LOGGER = logging.getLogger(__name__)
 
@@ -80,38 +81,6 @@ class RateLimitTracker:
             if channel:
                 self._channel_times.setdefault(func_id, {})[channel] = now
             self._global_times[func_id] = now
-            
-            # Periodic cleanup
-            if now - self._last_cleanup > self.CLEANUP_INTERVAL:
-                self._cleanup_old_entries(now)
-                self._last_cleanup = now
-
-    def _cleanup_old_entries(self, now):
-        """Remove entries older than ENTRY_MAX_AGE (must be called with lock held)."""
-        cutoff = now - self.ENTRY_MAX_AGE
-        
-        # Clean user times
-        for func_id in list(self._user_times.keys()):
-            user_dict = self._user_times[func_id]
-            for nick in list(user_dict.keys()):
-                if user_dict[nick] < cutoff:
-                    del user_dict[nick]
-            if not user_dict:
-                del self._user_times[func_id]
-        
-        # Clean channel times
-        for func_id in list(self._channel_times.keys()):
-            chan_dict = self._channel_times[func_id]
-            for channel in list(chan_dict.keys()):
-                if chan_dict[channel] < cutoff:
-                    del chan_dict[channel]
-            if not chan_dict:
-                del self._channel_times[func_id]
-        
-        # Clean global times
-        for func_id in list(self._global_times.keys()):
-            if self._global_times[func_id] < cutoff:
-                del self._global_times[func_id]
             
             # Periodic cleanup
             if now - self._last_cleanup > self.CLEANUP_INTERVAL:
@@ -220,6 +189,25 @@ class Dispatcher:
                 del self._ctcp_handlers[ctcp_cmd]
         self.plugins = [p for p in self.plugins if p.name != plugin_name]
 
+    def _resolve_patterns(self, func, static_attr, lazy_attr):
+        """Collect static patterns plus any produced by lazy loaders.
+
+        Sopel's ``*_lazy`` decorators register loader callables that are
+        evaluated at registration time with the bot settings and return a
+        list of (usually compiled) patterns.
+        """
+        patterns = list(getattr(func, static_attr, []) or [])
+        for loader in getattr(func, lazy_attr, []) or []:
+            try:
+                loaded = loader(self.settings)
+                if loaded:
+                    patterns.extend(loaded)
+            except Exception:
+                LOGGER.exception(
+                    "Lazy loader failed for %s in plugin function %s",
+                    lazy_attr, getattr(func, '__name__', '?'))
+        return patterns
+
     def register_plugins(self, plugins):
         """Register all loaded plugins with the dispatcher."""
         self.plugins.extend(plugins)
@@ -248,7 +236,8 @@ class Dispatcher:
 
             # Register rule handlers
             for func in plugin.rules:
-                for pattern in func._rules:
+                for pattern in self._resolve_patterns(
+                        func, '_rules', '_rules_lazy_loaders'):
                     try:
                         if isinstance(pattern, str):
                             # Replace $nick and $nickname
@@ -306,7 +295,8 @@ class Dispatcher:
 
             # Register find rules
             for func in plugin.find_rules:
-                for pattern in func._find_rules:
+                for pattern in self._resolve_patterns(
+                        func, '_find_rules', '_find_rules_lazy_loaders'):
                     try:
                         if isinstance(pattern, str):
                             compiled = re.compile(pattern)
@@ -319,7 +309,8 @@ class Dispatcher:
 
             # Register search rules
             for func in plugin.search_rules:
-                for pattern in func._search_rules:
+                for pattern in self._resolve_patterns(
+                        func, '_search_rules', '_search_rules_lazy_loaders'):
                     try:
                         if isinstance(pattern, str):
                             compiled = re.compile(pattern)
@@ -338,7 +329,8 @@ class Dispatcher:
 
             # Register URL callbacks
             for func in plugin.url_callbacks:
-                for pattern in func._url_regex:
+                for pattern in self._resolve_patterns(
+                        func, '_url_regex', '_url_lazy_loaders'):
                     try:
                         if isinstance(pattern, str):
                             compiled = re.compile(pattern)
@@ -512,8 +504,11 @@ class Dispatcher:
 
         def _run():
             try:
-                func(wrapper, trigger)
-                self._rate_limiter.update(func, nick, channel)
+                result = func(wrapper, trigger)
+                # A handler returning NOLIMIT opts out of rate-limit accounting
+                # for this invocation (Sopel semantics).
+                if result != NOLIMIT:
+                    self._rate_limiter.update(func, nick, channel)
             except Exception:
                 LOGGER.exception("Unhandled exception in plugin '%s', function '%s', triggered by %s in %s",
                                  plugin_name, func.__name__, trigger.nick, trigger.sender or 'PM')

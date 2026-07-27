@@ -187,9 +187,34 @@ class IRCBot:
     def send_privmsg(self, target, text):
         """Send a PRIVMSG (thread-safe)."""
         # Split long messages (512 bytes max per IRC line minus overhead)
-        for i in range(0, len(text), MAX_MESSAGE_LENGTH):
-            chunk = text[i:i + MAX_MESSAGE_LENGTH]
+        for chunk in self._split_message(text):
             self.send_raw(f'PRIVMSG {target} :{chunk}')
+
+    @staticmethod
+    def _split_message(text, max_bytes=MAX_MESSAGE_LENGTH):
+        """Split text into chunks that fit within max_bytes when UTF-8 encoded.
+
+        Splits on character boundaries so multibyte characters are never cut in
+        half, and measures length in bytes (IRC's real limit) rather than in
+        characters.
+        """
+        text = str(text)
+        if len(text.encode('utf-8')) <= max_bytes:
+            yield text
+            return
+
+        chunk = []
+        chunk_bytes = 0
+        for ch in text:
+            ch_bytes = len(ch.encode('utf-8'))
+            if chunk_bytes + ch_bytes > max_bytes and chunk:
+                yield ''.join(chunk)
+                chunk = []
+                chunk_bytes = 0
+            chunk.append(ch)
+            chunk_bytes += ch_bytes
+        if chunk:
+            yield ''.join(chunk)
 
     def send_notice(self, text, target):
         """Send a NOTICE (thread-safe)."""
