@@ -320,7 +320,7 @@ def bot_join(bot, trigger):
             LOGGER.info("Saved persistent channels to DB: %r", p_chans)
             bot.say(f'{channel} will rejoin on restart.')
         else:
-            LOGGER.info("Channel {channel} already in persistent list")
+            LOGGER.info("Channel %s already in persistent list", channel)
             bot.say(f'{channel} is already in persistent channel list.')
     except Exception:
         LOGGER.exception("Failed to save persistent channel")

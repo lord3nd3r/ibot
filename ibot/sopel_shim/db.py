@@ -305,7 +305,7 @@ class SopelDB:
             ).scalar_one_or_none()
             if result is not None:
                 return _deserialize(result.value)
-            return _deserialize(default) if default is not None else None
+            return default
 
     def delete_nick_value(self, nick, key):
         """Delete a value for a nick."""
@@ -358,7 +358,7 @@ class SopelDB:
             ).scalar_one_or_none()
             if result is not None:
                 return _deserialize(result.value)
-            return _deserialize(default) if default is not None else None
+            return default
 
     def delete_channel_value(self, channel, key):
         """Delete a value for a channel."""
@@ -410,7 +410,7 @@ class SopelDB:
             ).scalar_one_or_none()
             if result is not None:
                 return _deserialize(result.value)
-            return _deserialize(default) if default is not None else None
+            return default
 
     def delete_plugin_value(self, plugin, key):
         """Delete a value for a plugin."""
