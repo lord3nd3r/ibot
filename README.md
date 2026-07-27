@@ -6,7 +6,7 @@ Point it at a Sopel-style INI config (and optional Sopel SQLite/MySQL/Postgres d
 
 | | |
 |---|---|
-| **Version** | 0.1.0 (Beta) |
+| **Version** | 1.0.0 (stable-ish / somewhat beta) |
 | **Python** | 3.8+ |
 | **License** | MIT |
 | **Core dependency** | [SQLAlchemy](https://www.sqlalchemy.org/) 2.x |

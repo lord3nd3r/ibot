@@ -13,7 +13,7 @@ _URL_REGEX = re.compile(
 )
 
 # Default User-Agent matching roughly what Sopel sends.
-DEFAULT_UA = 'ibot/0.1 (+https://github.com/yourusername/ibot)'
+DEFAULT_UA = 'ibot/1.0 (+https://github.com/lord3nd3r/ibot)'
 
 
 def search_urls(text, schemes=None):
