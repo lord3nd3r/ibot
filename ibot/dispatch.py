@@ -497,7 +497,7 @@ class Dispatcher:
                     if match:
                         self._dispatch_to_func(
                             func, pretrigger, pname, match=match)
-                        break
+                        return
 
                 # Try nickname command handlers
                 for compiled, func, pname in self._nick_command_handlers:
