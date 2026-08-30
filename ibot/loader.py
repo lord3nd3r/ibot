@@ -118,17 +118,24 @@ def load_plugins(plugin_dirs: List[str], settings=None,
     exclude = exclude or []
     enable = enable or []
     plugins = []
+    loaded_names = set()
 
     for plugin_dir in plugin_dirs:
         if not os.path.isdir(plugin_dir):
             LOGGER.warning("Plugin directory not found: %s", plugin_dir)
             continue
 
-        for filename in sorted(os.listdir(plugin_dir)):
+        real_dir = os.path.realpath(plugin_dir)
+
+        for filename in sorted(os.listdir(real_dir)):
             if not filename.endswith('.py') or filename.startswith('_'):
                 continue
 
             name = filename[:-3]  # strip .py
+
+            if name in loaded_names:
+                LOGGER.debug("Skipping already loaded plugin: %s", name)
+                continue
 
             if name in exclude:
                 LOGGER.info("Skipping excluded plugin: %s", name)
@@ -138,11 +145,12 @@ def load_plugins(plugin_dirs: List[str], settings=None,
                 LOGGER.info("Skipping non-enabled plugin: %s", name)
                 continue
 
-            filepath = os.path.join(plugin_dir, filename)
+            filepath = os.path.join(real_dir, filename)
             try:
                 plugin = _load_plugin_file(name, filepath)
                 if plugin:
                     plugins.append(plugin)
+                    loaded_names.add(name)
                     LOGGER.info("Loaded plugin: %s (%d commands, %d rules, %d events)",
                                 name,
                                 len(plugin.commands),

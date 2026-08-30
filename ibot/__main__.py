@@ -90,10 +90,10 @@ def main():
 
     # Extra plugin directories from config
     for extra_dir in settings.core.extra:
-        extra_dir = os.path.expanduser(extra_dir.strip())
-        if os.path.isdir(extra_dir):
+        extra_dir = os.path.realpath(os.path.expanduser(extra_dir.strip()))
+        if os.path.isdir(extra_dir) and extra_dir not in [os.path.realpath(d) for d in plugin_dirs]:
             plugin_dirs.append(extra_dir)
-        else:
+        elif not os.path.isdir(extra_dir):
             logger.warning("Plugin directory not found: %s", extra_dir)
 
     # Default plugins dir relative to config
