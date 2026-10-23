@@ -62,7 +62,7 @@ An incoming message showing several of these terms:
 | **Prefix** | The regular expression that starts a command, `\.` by default. |
 | **Rehash** | `.rehash`: re-read the config and reload all plugins without reconnecting. A plugin that fails to import keeps its previous version. |
 | **Shim** | ibot's `sopel` compatibility package, inserted into `sys.modules`. |
-| **sopel-scripts** | Kristopher's plugin collection ([lord3nd3r/sopel-scripts](https://github.com/lord3nd3r/sopel-scripts)), loaded through `[core] extra`. |
+| **sopel-scripts** | The official ibot plugin collection ([lord3nd3r/sopel-scripts](https://github.com/lord3nd3r/sopel-scripts)), loaded through `[core] extra`. |
 | **`SopelWrapper` (`bot`)** | The object passed to handlers as `bot`. It knows the current trigger, so `say()` defaults to the right destination. |
 | **Trigger** | The object passed to handlers that describes the incoming message: nick, sender, match groups, tags, account, and admin/owner flags. See [Plugin API reference](developer-guide/plugin-api-reference.md#trigger). |
 

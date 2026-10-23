@@ -160,7 +160,7 @@ With systemd, use `Environment=` or, better, an `EnvironmentFile=` that has mode
 
 ## Settings for the sopel-scripts collection
 
-Kristopher's plugin collection, [lord3nd3r/sopel-scripts](https://github.com/lord3nd3r/sopel-scripts), documents each plugin's section and keys in its own `docs/` and `commands.md`. On the glitchy deployment, the config has sections for `help`, `wikipedia`, `tell`, `imdb`, `weather`, `chat`, `ai_multi`, `moo`, `safety`, `channelstats`, `harambe` and others, all read by those plugins and not by ibot itself. Refer to that repository for the key names and meanings.
+The official ibot plugin collection, [lord3nd3r/sopel-scripts](https://github.com/lord3nd3r/sopel-scripts), documents each plugin's section and keys in its own `docs/` and in the [Configuring plugins](https://github.com/lord3nd3r/sopel-scripts#-configuring-plugins) table of its README. Its plugins read sections such as `[ai_multi]`, `[antiflood]`, `[jpq]`, `[hunt]`, `[markov]`, `[moo]`, `[mug_game]`, `[promoteme]`, `[voting]` and `[harambe]`. Those sections are read by the plugins, not by ibot itself.
 
 > **Warning:** Several of those sections hold API keys and passwords. Keep the config file at mode `0600`, and never paste it into IRC, an issue, or a pastebin.
 

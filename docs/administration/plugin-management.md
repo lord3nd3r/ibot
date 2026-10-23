@@ -186,7 +186,7 @@ What takes effect after a rehash, and what doesn't:
 
 ## Using the sopel-scripts collection
 
-Most of glitchy's features come from [lord3nd3r/sopel-scripts](https://github.com/lord3nd3r/sopel-scripts), a collection of Sopel-style plugins. To use it with any ibot instance:
+[lord3nd3r/sopel-scripts](https://github.com/lord3nd3r/sopel-scripts) is the **official ibot plugin collection**, and most of glitchy's features come from it. To use it with any ibot instance:
 
 ```bash
 git clone https://github.com/lord3nd3r/sopel-scripts.git ~/.sopel/scripts
@@ -199,7 +199,7 @@ extra = ~/.sopel/scripts
 
 Then restart the bot. That repository documents each plugin's commands, configuration sections and dependencies in its `docs/` folder and `commands.md`, and that's the place to look for them. These ibot docs don't duplicate that material.
 
-> **Note:** Install the Python dependencies of the plugins you use (for example `requests`) into the same environment that runs ibot. A plugin whose import fails is skipped and logged at startup.
+> **Note:** Install the Python dependencies of the plugins you use into the same environment that runs ibot. For the whole collection, that's `pip install requests beautifulsoup4 defusedxml yfinance`. A plugin whose import fails is skipped and logged at startup.
 
 ## Known issues
 

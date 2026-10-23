@@ -94,7 +94,7 @@ Add it to `[core] channels`, or use `.bjoin #channel`, which saves it in the dat
 
 ### Is there a help command?
 
-ibot has no built-in help command. Help is provided by plugins, for example the sopel-scripts collection. See [Using the sopel-scripts collection](administration/plugin-management.md#using-the-sopel-scripts-collection).
+ibot has no built-in help command. Help is provided by plugins, for example the `commands` plugin in sopel-scripts, the official ibot plugin collection. See [Using the sopel-scripts collection](administration/plugin-management.md#using-the-sopel-scripts-collection).
 
 ## Plugins
 
