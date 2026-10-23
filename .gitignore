@@ -43,3 +43,11 @@ logs/
 # Node (if any)
 node_modules/
 package-lock.json
+
+# Backups / SQLite side files (added by hardening pass)
+*.cfg.*
+*.orig
+*.db-shm
+*.db-wal
+*.db-journal
+*.ibotnew

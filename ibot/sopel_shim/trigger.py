@@ -210,6 +210,19 @@ class Trigger(str):
         else:
             self._owner = False
 
+        # [core] extra_owners: additional owners, matched by services
+        # account (when known) or by nick, case-insensitively.
+        if not self._owner and settings is not None:
+            try:
+                extra = getattr(settings.core, 'extra_owners', None) or []
+            except Exception:
+                extra = []
+            if extra:
+                wanted = {str(e).strip().lower() for e in extra if str(e).strip()}
+                acct = str(self.account).lower() if self.account else None
+                if (acct and acct in wanted) or str(self.nick).lower() in wanted:
+                    self._owner = True
+
         self._admin = (
             self._owner
             or (self.account and self.account in admin_accounts)

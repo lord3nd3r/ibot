@@ -58,5 +58,7 @@ db_filename = ibot.db
 # Logging
 # logging_level = INFO
 """
-    with open(filename, 'w') as f:
+    # The config will hold passwords/API keys: create it owner-only (0600).
+    fd = os.open(filename, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'w') as f:
         f.write(default)

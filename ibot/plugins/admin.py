@@ -35,64 +35,22 @@ def rehash(bot, trigger):
 
     try:
         from ibot.config import load_config
-        from ibot.loader import load_plugins
-        from ibot.sopel_shim.bot import SopelWrapper
+        from ibot.loader import rehash_live
 
         core_bot = bot._bot
-        errors = []
 
         # Reload config from disk
         try:
             settings = load_config(core_bot.config_path)
-            core_bot.settings = settings
-            core_bot.dispatcher.settings = settings
         except Exception as e:
             bot.say(f'Config reload failed: {e}')
             LOGGER.exception("Config reload failed")
             return
 
-        # Run shutdown hooks on current plugins
-        for p in core_bot.dispatcher.plugins:
-            if p.shutdown_func:
-                try:
-                    p.shutdown_func(bot)
-                except Exception as e:
-                    errors.append(f'{p.name} shutdown: {e}')
-                    LOGGER.exception("Shutdown error in %s", p.name)
-
-        # Clear all handlers
-        core_bot.dispatcher.clear()
-
-        # Reload all plugins from disk
-        plugins = load_plugins(
-            core_bot.plugin_dirs,
-            settings=settings,
-            exclude=settings.core.exclude,
-            enable=settings.core.enable,
-        )
-
-        # Re-register
-        core_bot.dispatcher.register_plugins(plugins)
-
-        # Run setup hooks
-        for p in plugins:
-            if p.setup_func:
-                try:
-                    wrapper = SopelWrapper.__new__(SopelWrapper)
-                    wrapper._bot = core_bot
-                    wrapper._trigger = None
-                    wrapper._default_destination = None
-                    wrapper._output_prefix = ''
-                    p.setup_func(wrapper)
-                except TypeError:
-                    try:
-                        p.setup_func(settings)
-                    except Exception as e:
-                        errors.append(f'{p.name} setup: {e}')
-                        LOGGER.exception("Setup failed: %s", p.name)
-                except Exception as e:
-                    errors.append(f'{p.name} setup: {e}')
-                    LOGGER.exception("Setup failed: %s", p.name)
+        # Import everything first; plugins that fail to import keep running
+        # their current version. Each plugin is shut down before its new
+        # version's setup runs; a failed setup restores the old version.
+        active, errors = rehash_live(core_bot, settings)
 
         cmd_count = len(core_bot.dispatcher._command_handlers)
         rule_count = len(core_bot.dispatcher._rule_handlers)
@@ -101,7 +59,7 @@ def rehash(bot, trigger):
         core_bot.dispatcher.load_disabled_commands()
 
         bot.say(
-            f'Rehash complete: {len(plugins)} plugins loaded '
+            f'Rehash complete: {len(active)} plugins loaded '
             f'({cmd_count} commands, {rule_count} rules)')
 
         if errors:
@@ -125,59 +83,27 @@ def reload_plugin(bot, trigger):
     name = name.strip()
 
     try:
-        from ibot.loader import reload_plugin_file, find_plugin_file
-        from ibot.sopel_shim.bot import SopelWrapper
+        from ibot.loader import reload_plugin_live, find_plugin_file
 
         core_bot = bot._bot
 
-        # Find the plugin file
-        filepath = find_plugin_file(name, core_bot.plugin_dirs)
-        if not filepath:
+        if not find_plugin_file(name, core_bot.plugin_dirs):
             bot.reply(f'Plugin not found: {name}')
             return
 
-        # Run shutdown on old plugin
-        for p in core_bot.dispatcher.plugins:
-            if p.name == name and p.shutdown_func:
-                try:
-                    p.shutdown_func(bot)
-                except Exception:
-                    pass
-
-        # Unregister old handlers
-        core_bot.dispatcher.unregister_plugin(name)
-
-        # Reload from disk
-        new_plugin = reload_plugin_file(name, filepath)
-        if not new_plugin:
-            bot.reply(f'Failed to load plugin: {name}')
-            return
-
-        # Register new handlers
-        core_bot.dispatcher.register_plugins([new_plugin])
-
-        # Run setup
-        if new_plugin.setup_func:
-            try:
-                wrapper = SopelWrapper.__new__(SopelWrapper)
-                wrapper._bot = core_bot
-                wrapper._trigger = None
-                wrapper._default_destination = None
-                wrapper._output_prefix = ''
-                new_plugin.setup_func(wrapper)
-            except TypeError:
-                try:
-                    new_plugin.setup_func(core_bot.settings)
-                except Exception:
-                    pass
+        # New code is imported before the running version is touched; on
+        # failure the old version keeps running.
+        new_plugin = reload_plugin_live(core_bot, name)
 
         cmds = sum(len(f._commands) for f in new_plugin.commands)
         rules = len(new_plugin.rules)
         bot.say(f'Reloaded {name} ({cmds} commands, {rules} rules)')
+        for w in getattr(new_plugin, 'reload_warnings', []) or []:
+            bot.say(f'  ⚠ {w}')
 
     except Exception as e:
         LOGGER.exception("Reload failed for %s", name)
-        bot.say(f'Reload failed: {e}')
+        bot.say(f'Reload failed (previous version kept): {e}')
 
 
 @plugin.require_owner('Only the bot owner can load plugins.')
@@ -191,8 +117,7 @@ def load_plugin(bot, trigger):
     name = name.strip()
 
     try:
-        from ibot.loader import find_plugin_file, _load_plugin_file
-        from ibot.sopel_shim.bot import SopelWrapper
+        from ibot.loader import find_plugin_file, reload_plugin_live
 
         core_bot = bot._bot
 
@@ -207,26 +132,7 @@ def load_plugin(bot, trigger):
             bot.reply(f'Plugin not found: {name}')
             return
 
-        new_plugin = _load_plugin_file(name, filepath)
-        if not new_plugin:
-            bot.reply(f'Failed to load plugin: {name}')
-            return
-
-        core_bot.dispatcher.register_plugins([new_plugin])
-
-        if new_plugin.setup_func:
-            try:
-                wrapper = SopelWrapper.__new__(SopelWrapper)
-                wrapper._bot = core_bot
-                wrapper._trigger = None
-                wrapper._default_destination = None
-                wrapper._output_prefix = ''
-                new_plugin.setup_func(wrapper)
-            except TypeError:
-                try:
-                    new_plugin.setup_func(core_bot.settings)
-                except Exception:
-                    pass
+        new_plugin = reload_plugin_live(core_bot, name)
 
         cmds = sum(len(f._commands) for f in new_plugin.commands)
         bot.say(f'Loaded {name} ({cmds} commands)')
@@ -253,24 +159,16 @@ def unload_plugin(bot, trigger):
         bot.reply("Can't unload the admin plugin.")
         return
 
-    # Check it's loaded
-    found = False
-    for p in core_bot.dispatcher.plugins:
-        if p.name == name:
-            found = True
-            if p.shutdown_func:
-                try:
-                    p.shutdown_func(bot)
-                except Exception:
-                    pass
-            break
-
-    if not found:
+    from ibot.loader import unload_plugin_live
+    try:
+        err = unload_plugin_live(core_bot, name)
+    except KeyError:
         bot.reply(f'Plugin not loaded: {name}')
         return
 
-    core_bot.dispatcher.unregister_plugin(name)
     bot.say(f'Unloaded {name}')
+    if err:
+        bot.say(f'  ⚠ {err}')
 
 
 # ---- Plugin Info ----
@@ -292,7 +190,7 @@ def list_plugins(bot, trigger):
 @plugin.require_admin('Only admins can make the bot join channels.')
 @plugin.command('bjoin')
 def bot_join(bot, trigger):
-    """Join a channel. Usage: .bjoin #channel [key]"""
+    """Join a channel and add it to the auto-rejoin list (rejoined on restart). Undo with .bpart. Usage: .bjoin #channel [key]"""
     args = trigger.group(2)
     if not args:
         bot.reply('Usage: .bjoin #channel [key]')
@@ -330,7 +228,7 @@ def bot_join(bot, trigger):
 @plugin.require_admin('Only admins can make the bot part channels.')
 @plugin.command('bpart')
 def bot_part(bot, trigger):
-    """Part a channel. Usage: .bpart #channel [message]"""
+    """Part a channel and remove it from the auto-rejoin list (undoes .bjoin). Usage: .bpart #channel [message]"""
     args = trigger.group(2)
     if not args:
         bot.reply('Usage: .bpart #channel [message]')
@@ -393,6 +291,11 @@ def on_invite(bot, trigger):
 
     auto = bot._bot.settings.option('admin', 'auto_accept_invite', 'false')
     if str(auto).lower() not in ('true', 'yes', '1', 'on'):
+        return
+
+    # Only follow invites from the bot's owners/admins
+    if not (trigger.admin or trigger.owner):
+        LOGGER.info("Ignoring invite to %s from non-admin %s", channel, trigger.nick)
         return
 
     LOGGER.info("Received invite to %s from %s, joining", channel, trigger.nick)
@@ -476,8 +379,8 @@ def bot_mode(bot, trigger):
 def bot_quit(bot, trigger):
     """Shut down the bot. Usage: .bquit [message]"""
     msg = trigger.group(2) or 'Shutting down.'
+    # quit() stops the bot (no reconnect) after QUIT is flushed
     bot.quit(msg)
-    bot._bot._running = False
 
 
 # ---- Status ----

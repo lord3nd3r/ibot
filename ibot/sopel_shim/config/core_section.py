@@ -229,3 +229,51 @@ class CoreSection:
     def nick_blocks(self):
         """Nicks to ignore (Sopel-compatible). Case-insensitive exact match."""
         return self._getlist('nick_blocks', [])
+
+    # --- Connection identity / misc (Sopel-compatible) ---
+
+    @property
+    def bind_host(self):
+        """Local address to bind the outgoing connection to (optional)."""
+        val = self._get('bind_host', None)
+        return val.strip() if val and val.strip() else None
+
+    @property
+    def user(self):
+        """IRC ident/username. ``None`` means "use the nick" (ibot default)."""
+        val = self._get('user', None)
+        return val.strip() if val and val.strip() else None
+
+    @property
+    def name(self):
+        """IRC realname. ``None`` means "<nick> - ibot" (ibot default)."""
+        val = self._get('name', None)
+        return val if val and val.strip() else None
+
+    @property
+    def extra_owners(self):
+        """Additional owner nicks/accounts (Sopel-compatible list)."""
+        return self._getlist('extra_owners', [])
+
+    @property
+    def log_raw(self):
+        """Write a (redacted) raw IRC traffic log to ``logdir``."""
+        return self._getbool('log_raw', False)
+
+    @property
+    def logdir(self):
+        """Directory for log files (Sopel default: <homedir>/logs)."""
+        val = self._get('logdir', None)
+        if val and val.strip():
+            return os.path.expanduser(val.strip())
+        return os.path.join(self.homedir, 'logs')
+
+    @property
+    def handler_threads(self):
+        """Max worker threads used to run plugin handlers."""
+        return self._getint('handler_threads', 64)
+
+    @property
+    def handler_queue_size(self):
+        """Max queued (not yet running) plugin handler calls."""
+        return self._getint('handler_queue_size', 10000)

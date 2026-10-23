@@ -6,11 +6,27 @@ say(), reply(), notice(), etc.
 """
 
 import logging
+import re
 
 LOGGER = logging.getLogger(__name__)
 
 # Conservative per-PRIVMSG body limit (bytes), matching the core bot.
 _MAX_MESSAGE_BYTES = 400
+
+_LINE_BREAK_RE = re.compile(r'\r\n|\r|\n')
+
+
+def _lines(text):
+    """Split text on CR/LF; drop empty lines (single-line text is kept)."""
+    text = str(text)
+    if '\r' not in text and '\n' not in text:
+        return [text]
+    return [ln for ln in _LINE_BREAK_RE.split(text) if ln.strip()]
+
+
+def _one_line(text):
+    """Collapse CR/LF/NUL into spaces (for single-line fields)."""
+    return re.sub(r'[\r\n\0]+', ' ', str(text))
 
 
 class SopelWrapper:
@@ -50,7 +66,7 @@ class SopelWrapper:
         except Exception:
             splitter = None
 
-        for line in str(text).split('\n'):
+        for line in _LINE_BREAK_RE.split(str(text)):
             if not line:
                 continue
             if splitter is not None:
@@ -148,7 +164,8 @@ class SopelWrapper:
         msg = f"{nick}: {text}" if nick else text
         if notice:
             if dest:
-                self._bot.send_notice(msg, dest)
+                for line in _lines(msg):
+                    self._bot.send_notice(line, dest)
         elif dest:
             self.say(msg, destination=dest)
 
@@ -157,56 +174,78 @@ class SopelWrapper:
         dest = destination or self._default_destination
         if dest:
             text = self._prefix(text)
-            self._bot.send_notice(text, dest)
+            for line in _lines(text):
+                self._bot.send_notice(line, dest)
 
     def action(self, text, destination=None):
         """Send a CTCP ACTION (/me)."""
         dest = destination or self._default_destination
         if dest:
             text = self._prefix(text)
-            if hasattr(self._bot, 'send_privmsg_chunk'):
-                self._bot.send_privmsg_chunk(dest, f'\x01ACTION {text}\x01')
-            else:
-                self._bot.send_privmsg(dest, f'\x01ACTION {text}\x01')
+            for line in _lines(text):
+                if hasattr(self._bot, 'send_privmsg_chunk'):
+                    self._bot.send_privmsg_chunk(dest, f'\x01ACTION {line}\x01')
+                else:
+                    self._bot.send_privmsg(dest, f'\x01ACTION {line}\x01')
 
     def kick(self, nick, channel=None, text=None):
         """Kick a user from a channel."""
         chan = channel or self._default_destination
         if chan:
+            chan, nick = _one_line(chan), _one_line(nick)
             if text:
-                self._bot.send_raw(f'KICK {chan} {nick} :{text}')
+                self._bot.send_raw(f'KICK {chan} {nick} :{_one_line(text)}')
             else:
                 self._bot.send_raw(f'KICK {chan} {nick}')
 
     def join(self, channel, password=None):
         """Join a channel."""
+        channel = _one_line(channel)
         if password:
-            self._bot.send_raw(f'JOIN {channel} {password}')
+            self._bot.send_raw(f'JOIN {channel} {_one_line(password)}')
         else:
             self._bot.send_raw(f'JOIN {channel}')
 
     def part(self, channel, msg=None):
         """Part/leave a channel."""
+        channel = _one_line(channel)
         if msg:
-            self._bot.send_raw(f'PART {channel} :{msg}')
+            self._bot.send_raw(f'PART {channel} :{_one_line(msg)}')
         else:
             self._bot.send_raw(f'PART {channel}')
 
     def quit(self, message=None):
-        """Quit the IRC server."""
-        if message:
+        """Quit the IRC server and shut the bot down (no reconnect)."""
+        message = _one_line(message) if message else None
+        if hasattr(self._bot, 'quit'):
+            self._bot.quit(message)
+        elif message:
             self._bot.send_raw(f'QUIT :{message}')
         else:
             self._bot.send_raw('QUIT')
 
+    def restart(self, message=None):
+        """Quit and re-launch the bot process with the same config."""
+        message = _one_line(message) if message else 'Restarting'
+        if hasattr(self._bot, 'restart'):
+            self._bot.restart(message)
+        else:
+            self.quit(message)
+
+    def reload_plugin(self, name):
+        """Reload one plugin by name. Raises an exception on failure."""
+        from ibot.loader import reload_plugin_live
+        reload_plugin_live(self._bot, name)
+
     def write(self, args, text=None):
         """Send a raw IRC command."""
         if isinstance(args, (list, tuple)):
-            cmd = ' '.join(args)
+            cmd = ' '.join(str(a) for a in args)
         else:
             cmd = str(args)
+        cmd = _one_line(cmd)
         if text:
-            self._bot.send_raw(f'{cmd} :{text}')
+            self._bot.send_raw(f'{cmd} :{_one_line(text)}')
         else:
             self._bot.send_raw(cmd)
 
@@ -215,6 +254,19 @@ class SopelWrapper:
         self._bot.send_privmsg(str(recipient), str(text))
 
     # --- Properties proxied from the core bot ---
+
+    def __getattr__(self, name):
+        """Fall back to the core bot for public attributes (Sopel behaviour).
+
+        Private/dunder names are not forwarded, so feature probes like
+        ``getattr(bot, '_plugins', ...)`` keep behaving as before.
+        """
+        if name.startswith('_'):
+            raise AttributeError(name)
+        core = self.__dict__.get('_bot')
+        if core is None:
+            raise AttributeError(name)
+        return getattr(core, name)
 
     @property
     def nick(self):

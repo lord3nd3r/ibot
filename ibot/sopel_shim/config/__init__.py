@@ -2,7 +2,10 @@
 
 from ibot.sopel_shim.config.core_section import CoreSection
 import configparser
+import logging
 import os
+
+LOGGER = logging.getLogger(__name__)
 
 
 class Config:
@@ -13,7 +16,9 @@ class Config:
     """
 
     def __init__(self, filename=None):
-        self.parser = configparser.ConfigParser(allow_no_value=True)
+        # RawConfigParser: no '%' interpolation, so values (passwords, URLs,
+        # format strings) containing '%' are read literally.
+        self.parser = configparser.RawConfigParser(allow_no_value=True)
         self.filename = filename
         self._sections = {}
         self._section_instances = {}
@@ -62,6 +67,9 @@ class Config:
             self._section_instances[name] = instance
         except Exception:
             # If instantiation fails, provide a basic proxy
+            LOGGER.exception(
+                "Config section [%s] (%s) failed to initialise; falling back "
+                "to raw string values", name, getattr(cls, '__name__', cls))
             self._section_instances[name] = _SectionProxy(self.parser, name)
 
     def get_defined_sections(self):

@@ -12,9 +12,15 @@ work without migration:
 import json
 import logging
 import os
+import threading
+import time
 import typing
 
-from sqlalchemy import Column, create_engine, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    Column, create_engine, event, ForeignKey, Integer, String, Text,
+)
+from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy.sql import text as _sql_text
 from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 from sqlalchemy.sql import select, delete, update, func
 
@@ -158,12 +164,69 @@ class SopelDB:
             self.type = 'sqlite'
 
         self.engine = create_engine(self.url, pool_recycle=3600)
+        self._nick_lock = threading.RLock()
+
+        if self.type == 'sqlite':
+            self._configure_sqlite()
 
         # Create tables if they don't exist
         BASE.metadata.create_all(self.engine)
 
+        if self.type == 'sqlite':
+            self._ensure_unique_slug_index()
+
         self.ssession = scoped_session(
             sessionmaker(bind=self.engine))
+
+    # Milliseconds SQLite waits on a locked database before failing.
+    SQLITE_BUSY_TIMEOUT_MS = 10000
+
+    def _configure_sqlite(self):
+        """Use WAL + busy_timeout on every new SQLite connection.
+
+        Many plugins write from handler threads at once; WAL lets readers
+        and a writer coexist and busy_timeout makes writers wait for the lock
+        instead of failing with "database is locked".
+        """
+        busy = int(self.SQLITE_BUSY_TIMEOUT_MS)
+
+        @event.listens_for(self.engine, 'connect')
+        def _on_connect(dbapi_conn, _record):
+            cur = dbapi_conn.cursor()
+            try:
+                cur.execute(f'PRAGMA busy_timeout = {busy}')
+                try:
+                    cur.execute('PRAGMA journal_mode = WAL')
+                except Exception:
+                    # e.g. read-only filesystem / in-memory DB: keep default
+                    LOGGER.debug("Could not enable SQLite WAL mode",
+                                 exc_info=True)
+            finally:
+                cur.close()
+
+    def _ensure_unique_slug_index(self):
+        """Add a UNIQUE index on nicknames.slug when the data allows it.
+
+        Sopel's schema doesn't enforce one, so concurrent get_nick_id calls
+        could create duplicate slugs. The index is only created if no
+        duplicates already exist, so existing databases never fail to open.
+        """
+        try:
+            with self.engine.begin() as conn:
+                dup = conn.execute(_sql_text(
+                    'SELECT slug FROM nicknames GROUP BY slug '
+                    'HAVING COUNT(*) > 1 LIMIT 1')).first()
+                if dup is not None:
+                    LOGGER.warning(
+                        "nicknames table has duplicate slugs; not adding "
+                        "the unique slug index")
+                    return
+                conn.execute(_sql_text(
+                    'CREATE UNIQUE INDEX IF NOT EXISTS '
+                    'ix_ibot_nicknames_slug_unique ON nicknames (slug)'))
+        except Exception:
+            LOGGER.warning("Could not ensure unique slug index",
+                           exc_info=True)
 
     def connect(self):
         """Get a raw database connection (legacy compatibility)."""
@@ -185,28 +248,57 @@ class SopelDB:
         Uses Sopel's nick_ids + nicknames indirection tables.
         """
         slug = self.make_identifier(nick).lower()
+        nick_id = self._lookup_nick_id(slug)
+        if nick_id is not None:
+            return nick_id
+        if not create:
+            raise ValueError(f'No ID exists for nick: {nick}')
+
+        # Serialize creation in this process; the unique index (when
+        # present) plus the IntegrityError retry cover other writers.
+        with self._nick_lock:
+            last_exc = None
+            for attempt in range(3):
+                nick_id = self._lookup_nick_id(slug)
+                if nick_id is not None:
+                    return nick_id
+                try:
+                    return self._create_nick_id(slug, nick)
+                except IntegrityError as exc:
+                    # Someone else created it first; re-read theirs.
+                    last_exc = exc
+                except OperationalError as exc:
+                    # "database is locked" even after busy_timeout
+                    last_exc = exc
+                    time.sleep(0.2 * (attempt + 1))
+            nick_id = self._lookup_nick_id(slug)
+            if nick_id is not None:
+                return nick_id
+            raise last_exc
+
+    def _lookup_nick_id(self, slug):
         with self.session() as session:
             nickname = session.execute(
                 select(Nicknames).where(Nicknames.slug == slug)
-            ).scalar_one_or_none()
+            ).scalars().first()
+            return nickname.nick_id if nickname is not None else None
 
-            if nickname is None:
-                if not create:
-                    raise ValueError(f'No ID exists for nick: {nick}')
-                # Create a new nick_id
-                nick_id = NickIDs()
-                session.add(nick_id)
-                session.commit()
-
-                # Create nickname entry
-                nickname = Nicknames(
-                    nick_id=nick_id.nick_id,
+    def _create_nick_id(self, slug, nick):
+        with self.session() as session:
+            try:
+                new_id = NickIDs()
+                session.add(new_id)
+                session.flush()
+                session.add(Nicknames(
+                    nick_id=new_id.nick_id,
                     slug=slug,
                     canonical=str(nick),
-                )
-                session.add(nickname)
+                ))
                 session.commit()
-            return nickname.nick_id
+                return new_id.nick_id
+            except Exception:
+                session.rollback()
+                raise
 
     def alias_nick(self, nick, alias):
         """Create an alias for a nick."""
@@ -243,26 +335,37 @@ class SopelDB:
         """Merge two nick groups."""
         first_id = self.get_nick_id(first_nick, create=True)
         second_id = self.get_nick_id(second_nick, create=True)
+        if first_id == second_id:
+            # Already the same group; deleting "second" would wipe it.
+            return
+        # Everything happens in ONE session (calling set_nick_value here
+        # would reuse and close this thread's scoped session mid-loop).
         with self.session() as session:
-            results = session.execute(
-                select(NickValues).where(NickValues.nick_id == second_id)
-            ).scalars()
-            for row in results:
-                first_res = session.execute(
-                    select(NickValues)
+            try:
+                second_rows = session.execute(
+                    select(NickValues).where(NickValues.nick_id == second_id)
+                ).scalars().all()
+                first_keys = set(session.execute(
+                    select(NickValues.key)
                     .where(NickValues.nick_id == first_id)
-                    .where(NickValues.key == row.key)
-                ).scalar_one_or_none()
-                if not first_res:
-                    self.set_nick_value(
-                        first_nick, row.key, _deserialize(row.value))
-            session.execute(
-                delete(NickValues).where(NickValues.nick_id == second_id))
-            session.execute(
-                update(Nicknames)
-                .where(Nicknames.nick_id == second_id)
-                .values(nick_id=first_id))
-            session.commit()
+                ).scalars().all())
+                moved = [
+                    (row.key, row.value) for row in second_rows
+                    if row.key not in first_keys
+                ]
+                session.execute(
+                    delete(NickValues).where(NickValues.nick_id == second_id))
+                for key, value in moved:
+                    session.add(NickValues(
+                        nick_id=first_id, key=key, value=value))
+                session.execute(
+                    update(Nicknames)
+                    .where(Nicknames.nick_id == second_id)
+                    .values(nick_id=first_id))
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
 
     def forget_nick_group(self, nick):
         """Remove a nick, all aliases, and all stored values."""

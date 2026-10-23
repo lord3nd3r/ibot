@@ -14,7 +14,14 @@ import sys
 from ibot.bot import IRCBot
 from ibot.config import load_config, create_default_config
 from ibot.dispatch import Dispatcher
-from ibot.loader import install_sopel_shim, load_plugins
+from ibot.loader import (
+    install_sopel_shim, load_plugins, setup_registered_plugins,
+    run_plugin_shutdown,
+)
+
+# Working directory at launch; restored before a restart re-exec so
+# ``-m ibot`` and a relative config path resolve the same way again.
+_START_CWD = os.getcwd()
 
 
 def setup_logging(level='INFO'):
@@ -125,28 +132,15 @@ def main():
     # Load per-channel disabled commands from DB
     dispatcher.load_disabled_commands()
 
-    # Run setup functions
-    from ibot.sopel_shim.bot import SopelWrapper
+    # Run setup functions (exactly once each; a plugin whose setup fails
+    # is unregistered and reported)
+    setup_errors = setup_registered_plugins(bot, plugins)
     for plugin in plugins:
-        if plugin.setup_func:
-            try:
-                # Setup receives the bot (some expect settings, some expect bot)
-                wrapper = SopelWrapper.__new__(SopelWrapper)
-                wrapper._bot = bot
-                wrapper._trigger = None
-                wrapper._default_destination = None
-                wrapper._output_prefix = ''
-                plugin.setup_func(wrapper)
-                logger.info("Setup complete for plugin: %s", plugin.name)
-            except TypeError:
-                # Some setup functions expect just settings/config
-                try:
-                    plugin.setup_func(settings)
-                except Exception:
-                    logger.exception("Setup failed for plugin: %s",
-                                     plugin.name)
-            except Exception:
-                logger.exception("Setup failed for plugin: %s", plugin.name)
+        if plugin.setup_func and plugin in dispatcher.plugins:
+            logger.info("Setup complete for plugin: %s", plugin.name)
+    if setup_errors:
+        logger.error("%d plugin(s) disabled because setup failed: %s",
+                     len(setup_errors), '; '.join(setup_errors))
 
     # Run the bot
     try:
@@ -154,13 +148,39 @@ def main():
     except KeyboardInterrupt:
         logger.info("Interrupted, shutting down...")
     finally:
-        # Run shutdown functions
-        for plugin in plugins:
-            if plugin.shutdown_func:
-                try:
-                    plugin.shutdown_func(bot)
-                except Exception:
-                    logger.exception("Shutdown error in %s", plugin.name)
+        # Run shutdown functions for the plugins loaded *now* (after any
+        # live reloads), not the ones loaded at startup
+        for plugin in list(dispatcher.plugins):
+            run_plugin_shutdown(plugin, bot)
+        try:
+            dispatcher.pool.shutdown()
+        except Exception:
+            pass
+
+    if getattr(bot, '_restart_requested', False):
+        _restart_process(config_path, logger)
+
+
+def _restart_process(config_path, logger):
+    """Replace this process with a fresh copy of the bot (same arguments)."""
+    argv = list(sys.argv[1:])
+    try:
+        os.chdir(_START_CWD)
+    except OSError:
+        pass
+    if not os.path.exists(config_path):
+        # cwd changed under us: fall back to the absolute path
+        abs_cfg = os.path.abspath(config_path)
+        argv = [abs_cfg if a == config_path else a for a in argv]
+    cmd = [sys.executable, '-m', 'ibot'] + argv
+    logger.info("Restarting: %s", ' '.join(cmd))
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+    logging.shutdown()
+    os.execv(sys.executable, cmd)
 
 
 if __name__ == '__main__':

@@ -5,6 +5,7 @@ Handles matching incoming IRC messages against registered plugin handlers
 """
 
 import logging
+import queue
 import re
 import threading
 import time as time_mod
@@ -32,6 +33,112 @@ _PRIORITY_RANK = {
 def _handler_priority(func):
     return _PRIORITY_RANK.get(
         getattr(func, '_priority', 'medium') or 'medium', 1)
+
+
+class _Handler(tuple):
+    """A ``(compiled, func, plugin_name)`` tuple that also remembers its source.
+
+    Behaves exactly like a plain 3-tuple (plugins unpack these), but keeps the
+    original pattern text so patterns using ``$nick`` can be recompiled when
+    the bot's nick changes.
+    """
+
+    def __new__(cls, compiled, func, plugin_name, raw=None, kind=None):
+        obj = super().__new__(cls, (compiled, func, plugin_name))
+        obj.raw = raw
+        obj.kind = kind
+        return obj
+
+
+def _rule_flags(pattern):
+    """Sopel compiles rules case-insensitively (VERBOSE if multi-line)."""
+    flags = re.IGNORECASE
+    if '\n' in pattern:
+        flags |= re.VERBOSE
+    return flags
+
+
+class HandlerPool:
+    """Bounded pool of daemon worker threads for plugin handlers.
+
+    Replaces one-thread-per-message. Workers are spawned lazily up to
+    ``max_workers``; extra work waits in a bounded queue. If the queue is
+    full the job is dropped (with a rate-limited warning) instead of letting
+    the process run out of threads/memory. Workers are daemon threads so a
+    hung handler can never block shutdown.
+    """
+
+    def __init__(self, max_workers=64, max_queue=10000):
+        self.max_workers = max(1, int(max_workers or 64))
+        self._queue = queue.Queue(maxsize=max(1, int(max_queue or 10000)))
+        self._lock = threading.Lock()
+        self._workers = 0
+        self._idle = 0
+        self._shutdown = False
+        self._last_drop_warning = 0.0
+        self._dropped = 0
+
+    def submit(self, fn):
+        if self._shutdown:
+            return False
+        with self._lock:
+            need_worker = self._idle == 0 and self._workers < self.max_workers
+            if need_worker:
+                self._workers += 1
+        if need_worker:
+            try:
+                t = threading.Thread(target=self._worker, daemon=True,
+                                     name=f'ibot-handler-{self._workers}')
+                t.start()
+            except RuntimeError:
+                with self._lock:
+                    self._workers -= 1
+                LOGGER.exception("Could not start handler worker thread")
+        try:
+            self._queue.put_nowait(fn)
+            return True
+        except queue.Full:
+            self._dropped += 1
+            now = time_mod.time()
+            if now - self._last_drop_warning > 30:
+                self._last_drop_warning = now
+                LOGGER.warning("Handler queue full (%d workers busy); dropped "
+                               "%d job(s) so far", self._workers, self._dropped)
+            return False
+
+    def _worker(self):
+        while True:
+            with self._lock:
+                self._idle += 1
+            try:
+                fn = self._queue.get()
+            finally:
+                with self._lock:
+                    self._idle -= 1
+            if fn is None:
+                with self._lock:
+                    self._workers -= 1
+                return
+            try:
+                fn()
+            except Exception:
+                LOGGER.exception("Unhandled exception in handler worker")
+
+    def shutdown(self):
+        """Stop accepting work and let idle workers exit (does not wait)."""
+        self._shutdown = True
+        with self._lock:
+            n = self._workers
+        for _ in range(n):
+            try:
+                self._queue.put_nowait(None)
+            except queue.Full:
+                break
+
+    @property
+    def stats(self):
+        return {'workers': self._workers, 'idle': self._idle,
+                'queued': self._queue.qsize(), 'dropped': self._dropped}
 
 
 class RateLimitTracker:
@@ -83,6 +190,89 @@ class RateLimitTracker:
                     return True
 
         return False
+
+    def check_and_record(self, func, nick, channel, is_admin):
+        """Atomically check the rate limit and, if allowed, record the call.
+
+        Recording at check time (under the lock) means several messages
+        arriving at once can't all slip past the limit before the first
+        handler finishes.
+
+        Returns ``(blocked, token)``. Pass ``token`` to :meth:`restore` if the
+        handler returns NOLIMIT, to undo the recorded timestamp.
+        """
+        if not getattr(func, '_rate_limit_admins', False) and is_admin:
+            # Admins bypass the check, but the call still counts (as before)
+            return False, self._record(func, nick, channel)
+
+        func_id = id(func)
+        now = time_mod.time()
+        with self._lock:
+            user_rate = getattr(func, '_rate_user', 0)
+            if user_rate > 0:
+                last = self._user_times.get(func_id, {}).get(nick, 0)
+                if now - last < user_rate:
+                    return True, None
+            channel_rate = getattr(func, '_rate_channel', 0)
+            if channel_rate > 0 and channel:
+                last = self._channel_times.get(func_id, {}).get(channel, 0)
+                if now - last < channel_rate:
+                    return True, None
+            global_rate = getattr(func, '_rate_global', 0)
+            if global_rate > 0:
+                last = self._global_times.get(func_id, 0)
+                if now - last < global_rate:
+                    return True, None
+            return False, self._record_locked(func_id, nick, channel, now)
+
+    def _record(self, func, nick, channel):
+        with self._lock:
+            return self._record_locked(id(func), nick, channel, time_mod.time())
+
+    _MISSING = object()
+
+    def _record_locked(self, func_id, nick, channel, now):
+        user_times = self._user_times.setdefault(func_id, {})
+        prev = (func_id, nick, channel, now,
+                user_times.get(nick, self._MISSING),
+                self._channel_times.get(func_id, {}).get(channel, self._MISSING)
+                if channel else self._MISSING,
+                self._global_times.get(func_id, self._MISSING))
+        user_times[nick] = now
+        if channel:
+            self._channel_times.setdefault(func_id, {})[channel] = now
+        self._global_times[func_id] = now
+        if now - self._last_cleanup > self.CLEANUP_INTERVAL:
+            self._cleanup_old_entries(now)
+            self._last_cleanup = now
+        return prev
+
+    def restore(self, token):
+        """Undo a recorded call (handler returned NOLIMIT)."""
+        if not token:
+            return
+        func_id, nick, channel, stamp, p_user, p_chan, p_glob = token
+        missing = self._MISSING
+        with self._lock:
+            # Only roll back if nobody recorded a newer call meanwhile
+            ut = self._user_times.get(func_id)
+            if ut is not None and ut.get(nick) == stamp:
+                if p_user is missing:
+                    ut.pop(nick, None)
+                else:
+                    ut[nick] = p_user
+            if channel:
+                ct = self._channel_times.get(func_id)
+                if ct is not None and ct.get(channel) == stamp:
+                    if p_chan is missing:
+                        ct.pop(channel, None)
+                    else:
+                        ct[channel] = p_chan
+            if self._global_times.get(func_id) == stamp:
+                if p_glob is missing:
+                    self._global_times.pop(func_id, None)
+                else:
+                    self._global_times[func_id] = p_glob
 
     def update(self, func, nick, channel):
         """Record that a function was just called."""
@@ -137,7 +327,13 @@ class Dispatcher:
         self._rate_limiter = RateLimitTracker()
         self._ignore_nicks = set()
         self._ignore_hostmasks = []  # compiled regexes
+        self._channel_disabled = {}  # {channel_lower: set(plugins) / {'*'}}
         self._rebuild_ignore_lists()
+        self._compiled_nick = getattr(bot_core, 'nick', None)
+        core = settings.core
+        self.pool = HandlerPool(
+            getattr(core, 'handler_threads', 64) or 64,
+            getattr(core, 'handler_queue_size', 10000) or 10000)
 
         # Compiled command patterns: [(compiled_regex, func, plugin_name)]
         self._command_handlers = []
@@ -173,6 +369,35 @@ class Dispatcher:
                 self._ignore_hostmasks.append(get_hostmask_regex(mask))
             except re.error:
                 LOGGER.error("Bad host_blocks pattern: %s", mask)
+        self._load_channel_disables()
+
+    def _load_channel_disables(self):
+        """Read ``disable_plugins`` from ``[#channel]`` config sections."""
+        disabled = {}
+        parser = getattr(self.settings, 'parser', None)
+        if parser is None:
+            self._channel_disabled = disabled
+            return
+        try:
+            for section in parser.sections():
+                if not section.startswith(('#', '&')):
+                    continue
+                try:
+                    raw = parser.get(section, 'disable_plugins', fallback=None)
+                except Exception:
+                    raw = None
+                if not raw:
+                    continue
+                names = {p.strip().lower() for p in raw.split(',') if p.strip()}
+                if names:
+                    disabled[section.lower()] = names
+        except Exception:
+            LOGGER.exception("Failed to read per-channel disable_plugins")
+        self._channel_disabled = disabled
+        if disabled:
+            LOGGER.info("Per-channel disable_plugins from config: %s",
+                        ', '.join(f'{c}={",".join(sorted(v))}'
+                                  for c, v in sorted(disabled.items())))
 
     def _is_ignored(self, pretrigger):
         """True if the sender is on the ignore list."""
@@ -207,17 +432,20 @@ class Dispatcher:
             # (func, plugin)
             return (_handler_priority(item[0]), item[1], getattr(item[0], '__name__', ''))
 
-        self._command_handlers.sort(key=key3)
-        self._rule_handlers.sort(key=key3)
-        self._nick_command_handlers.sort(key=key3)
-        self._action_command_handlers.sort(key=key3)
-        self._find_handlers.sort(key=key3)
-        self._search_handlers.sort(key=key3)
-        self._url_handlers.sort(key=key3)
-        for evt in self._event_handlers:
-            self._event_handlers[evt].sort(key=key2)
-        for ctcp in self._ctcp_handlers:
-            self._ctcp_handlers[ctcp].sort(key=key2)
+        # Build sorted copies and swap them in, instead of sorting in place:
+        # list.sort() leaves the list empty while it runs, which a dispatch
+        # on the event-loop thread could observe during a live reload.
+        self._command_handlers = sorted(self._command_handlers, key=key3)
+        self._rule_handlers = sorted(self._rule_handlers, key=key3)
+        self._nick_command_handlers = sorted(self._nick_command_handlers, key=key3)
+        self._action_command_handlers = sorted(self._action_command_handlers, key=key3)
+        self._find_handlers = sorted(self._find_handlers, key=key3)
+        self._search_handlers = sorted(self._search_handlers, key=key3)
+        self._url_handlers = sorted(self._url_handlers, key=key3)
+        for evt in list(self._event_handlers):
+            self._event_handlers[evt] = sorted(self._event_handlers[evt], key=key2)
+        for ctcp in list(self._ctcp_handlers):
+            self._ctcp_handlers[ctcp] = sorted(self._ctcp_handlers[ctcp], key=key2)
 
     def clear(self):
         """Clear all registered handlers (for rehash/full reload)."""
@@ -232,6 +460,12 @@ class Dispatcher:
         self._url_handlers.clear()
         self._interval_jobs.clear()
         self.plugins.clear()
+        cancel = getattr(self.bot, 'cancel_interval_jobs', None)
+        if cancel is not None:
+            try:
+                cancel()
+            except Exception:
+                LOGGER.exception("Failed to cancel interval jobs")
 
     def unregister_plugin(self, plugin_name):
         """Remove all handlers belonging to a specific plugin."""
@@ -262,6 +496,13 @@ class Dispatcher:
             if not self._ctcp_handlers[ctcp_cmd]:
                 del self._ctcp_handlers[ctcp_cmd]
         self.plugins = [p for p in self.plugins if p.name != plugin_name]
+        cancel = getattr(self.bot, 'cancel_interval_jobs', None)
+        if cancel is not None:
+            try:
+                cancel(plugin_name)
+            except Exception:
+                LOGGER.exception("Failed to cancel interval jobs for %s",
+                                 plugin_name)
 
     def _resolve_patterns(self, func, static_attr, lazy_attr):
         """Collect static patterns plus any produced by lazy loaders.
@@ -281,6 +522,56 @@ class Dispatcher:
                     "Lazy loader failed for %s in plugin function %s",
                     lazy_attr, getattr(func, '__name__', '?'))
         return patterns
+
+    def _compile_rule(self, pattern):
+        """Compile a string rule the way Sopel does.
+
+        ``$nickname`` becomes the bot's nick, ``$nick`` the nick followed by
+        ``:``/``,``/space (``$nickname`` must be replaced first, otherwise
+        ``$nick`` would eat its prefix). Case-insensitive like Sopel.
+        """
+        nick = re.escape(self.bot.nick)
+        pattern = pattern.replace('$nickname', nick)
+        pattern = pattern.replace('$nick', nick + r'[:,\s]\s*')
+        return re.compile(pattern, _rule_flags(pattern))
+
+    def _compile_nick_command(self, cmd):
+        nick = re.escape(self.bot.nick)
+        pattern = (
+            r'^' + nick + r'[:,\s]\s*'
+            r'(' + re.escape(cmd) + r')'
+            r'(?:\s+(.*))?$'
+        )
+        return re.compile(pattern, re.IGNORECASE)
+
+    def refresh_nick_patterns(self):
+        """Recompile ``$nick`` rules and nick commands after a nick change."""
+        nick = getattr(self.bot, 'nick', None)
+        if not nick or nick == self._compiled_nick:
+            return
+
+        def rebuild(handlers):
+            out = []
+            for h in handlers:
+                kind = getattr(h, 'kind', None)
+                raw = getattr(h, 'raw', None)
+                if raw is None or kind is None:
+                    out.append(h)
+                    continue
+                try:
+                    if kind == 'rule':
+                        compiled = self._compile_rule(raw)
+                    else:
+                        compiled = self._compile_nick_command(raw)
+                    out.append(_Handler(compiled, h[1], h[2], raw, kind))
+                except re.error:
+                    out.append(h)
+            return out
+
+        self._rule_handlers = rebuild(self._rule_handlers)
+        self._nick_command_handlers = rebuild(self._nick_command_handlers)
+        self._compiled_nick = nick
+        LOGGER.info("Recompiled nick-based patterns for nick %s", nick)
 
     def register_plugins(self, plugins):
         """Register all loaded plugins with the dispatcher."""
@@ -314,16 +605,13 @@ class Dispatcher:
                         func, '_rules', '_rules_lazy_loaders'):
                     try:
                         if isinstance(pattern, str):
-                            # Replace $nick and $nickname
-                            nick = re.escape(self.bot.nick)
-                            pattern = pattern.replace(
-                                '$nick', nick + r'[:,\s]\s*')
-                            pattern = pattern.replace('$nickname', nick)
-                            compiled = re.compile(pattern)
+                            raw = pattern if '$nick' in pattern else None
+                            compiled = self._compile_rule(pattern)
                         else:
+                            raw = None
                             compiled = pattern
                         self._rule_handlers.append(
-                            (compiled, func, plugin_name))
+                            _Handler(compiled, func, plugin_name, raw, 'rule'))
                     except re.error:
                         LOGGER.error("Bad rule pattern in %s: %s",
                                      plugin_name, pattern)
@@ -338,17 +626,10 @@ class Dispatcher:
             # Register nickname command handlers
             for func in plugin.nick_commands:
                 for cmd in func._nickname_commands:
-                    nick = re.escape(self.bot.nick)
-                    escaped_cmd = re.escape(cmd)
-                    pattern = (
-                        r'^' + nick + r'[:,\s]\s*'
-                        r'(' + escaped_cmd + r')'
-                        r'(?:\s+(.*))?$'
-                    )
                     try:
-                        compiled = re.compile(pattern, re.IGNORECASE)
+                        compiled = self._compile_nick_command(cmd)
                         self._nick_command_handlers.append(
-                            (compiled, func, plugin_name))
+                            _Handler(compiled, func, plugin_name, cmd, 'nickcmd'))
                     except re.error:
                         LOGGER.error("Bad nick command pattern: %s", cmd)
 
@@ -373,7 +654,7 @@ class Dispatcher:
                         func, '_find_rules', '_find_rules_lazy_loaders'):
                     try:
                         if isinstance(pattern, str):
-                            compiled = re.compile(pattern)
+                            compiled = re.compile(pattern, _rule_flags(pattern))
                         else:
                             compiled = pattern
                         self._find_handlers.append(
@@ -387,7 +668,7 @@ class Dispatcher:
                         func, '_search_rules', '_search_rules_lazy_loaders'):
                     try:
                         if isinstance(pattern, str):
-                            compiled = re.compile(pattern)
+                            compiled = re.compile(pattern, _rule_flags(pattern))
                         else:
                             compiled = pattern
                         self._search_handlers.append(
@@ -407,7 +688,7 @@ class Dispatcher:
                         func, '_url_regex', '_url_lazy_loaders'):
                     try:
                         if isinstance(pattern, str):
-                            compiled = re.compile(pattern)
+                            compiled = re.compile(pattern, _rule_flags(pattern))
                         else:
                             compiled = pattern
                         self._url_handlers.append(
@@ -421,6 +702,19 @@ class Dispatcher:
                     self._interval_jobs.append((iv, func, plugin_name))
 
         self._sort_handlers()
+        self._compiled_nick = getattr(self.bot, 'nick', None)
+
+        # Start interval jobs for these plugins if we're already connected
+        # (no-op at startup; the bot starts all jobs once connected)
+        start = getattr(self.bot, 'start_interval_jobs', None)
+        if start is not None:
+            for plugin in plugins:
+                if plugin.intervals:
+                    try:
+                        start(plugin.name)
+                    except Exception:
+                        LOGGER.exception("Failed to start interval jobs for %s",
+                                         plugin.name)
 
         total_commands = len(self._command_handlers)
         total_rules = len(self._rule_handlers)
@@ -443,8 +737,9 @@ class Dispatcher:
         event = pretrigger.event
 
         # Dispatch to event handlers first
-        if event in self._event_handlers:
-            for func, plugin_name in self._event_handlers[event]:
+        event_handlers = self._event_handlers.get(event)
+        if event_handlers:
+            for func, plugin_name in list(event_handlers):
                 self._dispatch_to_func(
                     func, pretrigger, plugin_name, event_match=True)
 
@@ -456,8 +751,9 @@ class Dispatcher:
             if is_ctcp:
                 # Handle CTCP (including ACTION)
                 ctcp_cmd = pretrigger.ctcp.upper()
-                if ctcp_cmd in self._ctcp_handlers:
-                    for func, pname in self._ctcp_handlers[ctcp_cmd]:
+                ctcp_handlers = self._ctcp_handlers.get(ctcp_cmd)
+                if ctcp_handlers:
+                    for func, pname in list(ctcp_handlers):
                         # If handler has rules, check them against the CTCP text
                         if hasattr(func, '_rules') and func._rules:
                             ctcp_text = pretrigger.args[-1] if pretrigger.args else ''
@@ -465,7 +761,8 @@ class Dispatcher:
                             for rule_pattern in func._rules:
                                 try:
                                     if isinstance(rule_pattern, str):
-                                        compiled = re.compile(rule_pattern)
+                                        compiled = re.compile(
+                                            rule_pattern, _rule_flags(rule_pattern))
                                     else:
                                         compiled = rule_pattern
                                     match = compiled.match(ctcp_text)
@@ -485,14 +782,14 @@ class Dispatcher:
                 # Handle action commands
                 if ctcp_cmd == 'ACTION':
                     action_text = pretrigger.args[-1] if pretrigger.args else ''
-                    for compiled, func, pname in self._action_command_handlers:
+                    for compiled, func, pname in list(self._action_command_handlers):
                         match = compiled.match(action_text)
                         if match:
                             self._dispatch_to_func(
                                 func, pretrigger, pname, match=match)
             else:
                 # Try command handlers
-                for compiled, func, pname in self._command_handlers:
+                for compiled, func, pname in list(self._command_handlers):
                     match = compiled.match(text)
                     if match:
                         self._dispatch_to_func(
@@ -500,27 +797,27 @@ class Dispatcher:
                         return
 
                 # Try nickname command handlers
-                for compiled, func, pname in self._nick_command_handlers:
+                for compiled, func, pname in list(self._nick_command_handlers):
                     match = compiled.match(text)
                     if match:
                         self._dispatch_to_func(
                             func, pretrigger, pname, match=match)
 
                 # Try rule handlers
-                for compiled, func, pname in self._rule_handlers:
+                for compiled, func, pname in list(self._rule_handlers):
                     match = compiled.match(text)
                     if match:
                         self._dispatch_to_func(
                             func, pretrigger, pname, match=match)
 
                 # Try find handlers (match multiple times)
-                for compiled, func, pname in self._find_handlers:
+                for compiled, func, pname in list(self._find_handlers):
                     for match in compiled.finditer(text):
                         self._dispatch_to_func(
                             func, pretrigger, pname, match=match)
 
                 # Try search handlers (first match only)
-                for compiled, func, pname in self._search_handlers:
+                for compiled, func, pname in list(self._search_handlers):
                     match = compiled.search(text)
                     if match:
                         self._dispatch_to_func(
@@ -528,8 +825,9 @@ class Dispatcher:
 
                 # Try URL callbacks
                 if pretrigger.urls:
+                    url_handlers = list(self._url_handlers)
                     for url in pretrigger.urls:
-                        for compiled, func, pname in self._url_handlers:
+                        for compiled, func, pname in url_handlers:
                             match = compiled.search(url)
                             if match:
                                 self._dispatch_to_func(
@@ -607,7 +905,9 @@ class Dispatcher:
         channel = str(trigger.sender).lower() if trigger.sender else None
         is_admin = trigger.admin
 
-        if self._rate_limiter.check(func, nick, channel, is_admin):
+        blocked, rl_token = self._rate_limiter.check_and_record(
+            func, nick, channel, is_admin)
+        if blocked:
             msg = getattr(func, '_rate_message', None)
             if msg:
                 wrapper.notice(msg, destination=str(trigger.nick))
@@ -621,24 +921,27 @@ class Dispatcher:
                 result = func(wrapper, trigger)
                 # A handler returning NOLIMIT opts out of rate-limit accounting
                 # for this invocation (Sopel semantics).
-                if result != NOLIMIT:
-                    self._rate_limiter.update(func, nick, channel)
+                if result == NOLIMIT:
+                    self._rate_limiter.restore(rl_token)
             except Exception:
                 LOGGER.exception("Unhandled exception in plugin '%s', function '%s', triggered by %s in %s",
                                  plugin_name, func.__name__, trigger.nick, trigger.sender or 'PM')
 
         if threaded:
-            t = threading.Thread(target=_run, daemon=True)
-            t.start()
+            self.pool.submit(_run)
         else:
             _run()
+
     def _is_plugin_disabled(self, channel, plugin_name):
         """Check if a plugin is disabled in a channel via memory cache."""
         # The admin plugin can never be disabled
         if plugin_name == 'admin':
             return False
-        disabled = self.bot.memory.get('disabled_plugins', {})
         channel_lower = channel.lower()
+        cfg = self._channel_disabled.get(channel_lower)
+        if cfg and ('*' in cfg or plugin_name.lower() in cfg):
+            return True
+        disabled = self.bot.memory.get('disabled_plugins', {})
         if channel_lower in disabled:
             return plugin_name.lower() in disabled[channel_lower]
         return False
