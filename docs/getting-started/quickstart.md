@@ -205,7 +205,7 @@ Do one of the following:
 
 - Keep it running: [Running as a service](running-as-a-service.md)
 - Tune every option: [Core reference](../configuration/core-reference.md)
-- Load the sopel-scripts collection: [Plugin management](../administration/plugin-management.md#using-the-sopel-scripts-collection)
+- Load the ibot-plugins collection: [Plugin management](../administration/plugin-management.md#using-the-ibot-plugins-collection)
 
 ## See also
 

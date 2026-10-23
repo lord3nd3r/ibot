@@ -54,7 +54,7 @@ flowchart LR
 
     subgraph Plugins["Plugin threads"]
         P1[admin plugin]
-        P2[extra plugins<br/>e.g. sopel-scripts]
+        P2[extra plugins<br/>e.g. ibot-plugins]
     end
 
     subgraph Shim["ibot/sopel_shim"]

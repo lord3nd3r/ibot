@@ -308,7 +308,7 @@ Events can be IRC commands (`JOIN`, `PART`, `QUIT`, `NICK`, `MODE`, `KICK`, `INV
 - [Tools reference](tools-reference.md)
 - [Testing](testing.md)
 - [Sopel compatibility](sopel-compatibility.md)
-- [sopel-scripts](https://github.com/lord3nd3r/sopel-scripts): real-world examples
+- [ibot-plugins](https://github.com/lord3nd3r/ibot-plugins): real-world examples
 
 ---
 [← Back to docs home](../index.md)

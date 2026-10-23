@@ -122,7 +122,7 @@ Plugins in `~/.sopel/scripts` can be shared with a real Sopel instance. Point `[
 - [Plugin API reference](plugin-api-reference.md)
 - [Tools reference](tools-reference.md)
 - [Dispatch](../architecture/dispatch.md)
-- [sopel-scripts](https://github.com/lord3nd3r/sopel-scripts)
+- [ibot-plugins](https://github.com/lord3nd3r/ibot-plugins)
 
 ---
 [← Back to docs home](../index.md)

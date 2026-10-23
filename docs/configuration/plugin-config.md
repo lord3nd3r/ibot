@@ -2,7 +2,7 @@
 
 # Plugin configuration
 
-Plugins keep their settings in their own INI sections. This page covers the built-in `[admin]` section, how plugins declare and read settings through Sopel's `StaticSection` API, the attribute types ibot supports, environment-variable overrides, and where to find settings for the sopel-scripts collection.
+Plugins keep their settings in their own INI sections. This page covers the built-in `[admin]` section, how plugins declare and read settings through Sopel's `StaticSection` API, the attribute types ibot supports, environment-variable overrides, and where to find settings for the ibot-plugins collection.
 
 ## In this article
 
@@ -13,7 +13,7 @@ Plugins keep their settings in their own INI sections. This page covers the buil
 - [Attribute types](#attribute-types)
 - [Environment-variable overrides](#environment-variable-overrides)
 - [Differences from Sopel](#differences-from-sopel)
-- [Settings for the sopel-scripts collection](#settings-for-the-sopel-scripts-collection)
+- [Settings for the ibot-plugins collection](#settings-for-the-ibot-plugins-collection)
 - [See also](#see-also)
 
 ## Prerequisites
@@ -158,9 +158,9 @@ With systemd, use `Environment=` or, better, an `EnvironmentFile=` that has mode
 | `FilenameAttribute` resolves relative to the config directory | Only expands `~` |
 | `[#channel]` sections with `disable_plugins` / `disable_commands` | `disable_plugins` is honoured; `disable_commands` is ignored (see [Per-channel settings](per-channel.md#sopel-style-channel-sections)) |
 
-## Settings for the sopel-scripts collection
+## Settings for the ibot-plugins collection
 
-The official ibot plugin collection, [lord3nd3r/sopel-scripts](https://github.com/lord3nd3r/sopel-scripts), documents each plugin's section and keys in its own `docs/` and in the [Configuring plugins](https://github.com/lord3nd3r/sopel-scripts#-configuring-plugins) table of its README. Its plugins read sections such as `[ai_multi]`, `[antiflood]`, `[jpq]`, `[hunt]`, `[markov]`, `[moo]`, `[mug_game]`, `[promoteme]`, `[voting]` and `[harambe]`. Those sections are read by the plugins, not by ibot itself.
+The official ibot plugin collection, [lord3nd3r/ibot-plugins](https://github.com/lord3nd3r/ibot-plugins), documents each plugin's section and keys in its own `docs/` and in the [Configuring plugins](https://github.com/lord3nd3r/ibot-plugins#-configuring-plugins) table of its README. Its plugins read sections such as `[ai_multi]`, `[antiflood]`, `[jpq]`, `[hunt]`, `[markov]`, `[moo]`, `[mug_game]`, `[promoteme]`, `[voting]` and `[harambe]`. Those sections are read by the plugins, not by ibot itself.
 
 > **Warning:** Several of those sections hold API keys and passwords. Keep the config file at mode `0600`, and never paste it into IRC, an issue, or a pastebin.
 

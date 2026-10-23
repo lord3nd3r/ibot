@@ -53,6 +53,7 @@ An incoming message showing several of these terms:
 | **Core bot** | ibot's `Bot` object (`ibot.bot`). It owns the connection, state, database and dispatcher. Plugins see it through the wrapper. |
 | **Dispatcher** | The component that matches incoming lines against handlers, applies filters, and runs them. See [Dispatch](architecture/dispatch.md). |
 | **Handler pool** | The bounded set of worker threads (`[core] handler_threads`, default 64) that runs threaded handlers. See [Dispatch: Threading model](architecture/dispatch.md#threading-model). |
+| **ibot-plugins** | The official ibot plugin collection ([lord3nd3r/ibot-plugins](https://github.com/lord3nd3r/ibot-plugins)), loaded through `[core] extra`. |
 | **Interval job** | A function decorated with `@plugin.interval(seconds)` that runs periodically. |
 | **Lazy loader** | A function passed to `@plugin.rule_lazy` and similar, which returns patterns when the plugin is registered. |
 | **Owner** | The most-trusted user, set by `owner_account` or `owner`. Additional owners can be listed in `extra_owners`. |
@@ -62,7 +63,6 @@ An incoming message showing several of these terms:
 | **Prefix** | The regular expression that starts a command, `\.` by default. |
 | **Rehash** | `.rehash`: re-read the config and reload all plugins without reconnecting. A plugin that fails to import keeps its previous version. |
 | **Shim** | ibot's `sopel` compatibility package, inserted into `sys.modules`. |
-| **sopel-scripts** | The official ibot plugin collection ([lord3nd3r/sopel-scripts](https://github.com/lord3nd3r/sopel-scripts)), loaded through `[core] extra`. |
 | **`SopelWrapper` (`bot`)** | The object passed to handlers as `bot`. It knows the current trigger, so `say()` defaults to the right destination. |
 | **Trigger** | The object passed to handlers that describes the incoming message: nick, sender, match groups, tags, account, and admin/owner flags. See [Plugin API reference](developer-guide/plugin-api-reference.md#trigger). |
 

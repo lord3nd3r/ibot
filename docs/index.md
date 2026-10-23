@@ -126,7 +126,7 @@ The full walkthrough is in [Quickstart](getting-started/quickstart.md).
 | Project | Relationship |
 |---|---|
 | [Sopel](https://sopel.chat/) | The upstream bot whose plugin API ibot implements |
-| [lord3nd3r/sopel-scripts](https://github.com/lord3nd3r/sopel-scripts) | The official ibot plugin collection (what the `glitchy` deployment runs), with its own `docs/` and `commands.md` |
+| [lord3nd3r/ibot-plugins](https://github.com/lord3nd3r/ibot-plugins) | The official ibot plugin collection (what the `glitchy` deployment runs), with its own `docs/` and `commands.md` |
 
 ## See also
 

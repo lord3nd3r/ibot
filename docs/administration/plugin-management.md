@@ -15,7 +15,7 @@ This page explains where ibot finds plugins, the order it loads them in, how to 
 - [Hot reloading](#hot-reloading)
 - [What rehash does](#what-rehash-does)
 - [Plugin lifecycle hooks](#plugin-lifecycle-hooks)
-- [Using the sopel-scripts collection](#using-the-sopel-scripts-collection)
+- [Using the ibot-plugins collection](#using-the-ibot-plugins-collection)
 - [Known issues](#known-issues)
 - [See also](#see-also)
 
@@ -184,12 +184,12 @@ What takes effect after a rehash, and what doesn't:
 | `shutdown()` raises | Logged as `Shutdown error in plugin <name>` and reported; the unload or swap continues |
 | Process exit | `shutdown()` runs for every plugin loaded **at that moment**, including ones added with `.load` or replaced with `.reload` |
 
-## Using the sopel-scripts collection
+## Using the ibot-plugins collection
 
-[lord3nd3r/sopel-scripts](https://github.com/lord3nd3r/sopel-scripts) is the **official ibot plugin collection**, and most of glitchy's features come from it. To use it with any ibot instance:
+[lord3nd3r/ibot-plugins](https://github.com/lord3nd3r/ibot-plugins) is the **official ibot plugin collection**, and most of glitchy's features come from it. To use it with any ibot instance:
 
 ```bash
-git clone https://github.com/lord3nd3r/sopel-scripts.git ~/.sopel/scripts
+git clone https://github.com/lord3nd3r/ibot-plugins.git ~/.sopel/scripts
 ```
 
 ```ini

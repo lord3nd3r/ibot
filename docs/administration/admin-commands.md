@@ -55,7 +55,7 @@ This page documents every command in ibot's built-in `admin` plugin (`ibot/plugi
 
 That's 17 functions and 19 command names (`msg` and `die` are aliases).
 
-> **Note:** ibot doesn't have a built-in `help` command. Help comes from a plugin, such as the `commands` plugin (`help`, `commands`, `cmds`) in [sopel-scripts](https://github.com/lord3nd3r/sopel-scripts), the official ibot plugin collection.
+> **Note:** ibot doesn't have a built-in `help` command. Help comes from a plugin, such as the `commands` plugin (`help`, `commands`, `cmds`) in [ibot-plugins](https://github.com/lord3nd3r/ibot-plugins), the official ibot plugin collection.
 
 ---
 

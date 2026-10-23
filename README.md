@@ -12,7 +12,7 @@ ibot is not a fork of Sopel. It has its own IRC client core (`ibot.bot`), its ow
 | **License** | MIT. See [LICENSE](LICENSE) |
 | **Repository** | <https://github.com/lord3nd3r/ibot> |
 | **Maintainer** | lord3nd3r (IRC: `End3r`) |
-| **Official plugins** | [lord3nd3r/sopel-scripts](https://github.com/lord3nd3r/sopel-scripts), the official ibot plugin collection |
+| **Official plugins** | [lord3nd3r/ibot-plugins](https://github.com/lord3nd3r/ibot-plugins), the official ibot plugin collection |
 | **Reference deployment** | `glitchy` on Rizon, which runs that collection |
 
 ---
@@ -26,7 +26,7 @@ ibot is not a fork of Sopel. It has its own IRC client core (`ibot.bot`), its ow
 - [Project layout](#project-layout)
 - [Documentation](#documentation)
 - [Sopel compatibility at a glance](#sopel-compatibility-at-a-glance)
-- [Official plugin collection: sopel-scripts](#official-plugin-collection-sopel-scripts)
+- [Official plugin collection: ibot-plugins](#official-plugin-collection-ibot-plugins)
 - [Running the tests](#running-the-tests)
 - [Contributing](#contributing)
 - [License](#license)
@@ -185,9 +185,9 @@ All documentation is under [`docs/`](docs/index.md).
 
 The full matrix, with every known difference, is on the [Sopel compatibility](docs/developer-guide/sopel-compatibility.md) page.
 
-## Official plugin collection: sopel-scripts
+## Official plugin collection: ibot-plugins
 
-ibot ships with a single built-in plugin, `admin`. The **official ibot plugin collection** is in a separate repository, **[lord3nd3r/sopel-scripts](https://github.com/lord3nd3r/sopel-scripts)**. It's what the `glitchy` deployment runs, and it has its own per-plugin documentation (`docs/`) and a command reference (`commands.md`). It includes AI chat (multi-backend), moderation (anti-flood, anti-spam, auto-op/voice, oper scanning), games and economy (trivia, hunt, mug, beer), and utilities (weather, stock, wiki, seen, tell, quotes, polls, URL and YouTube titles, feeds, channel statistics). To use them, point `[core] extra` at a checkout. See [Using the sopel-scripts collection](docs/administration/plugin-management.md#using-the-sopel-scripts-collection) and that repository's [README](https://github.com/lord3nd3r/sopel-scripts#readme).
+ibot ships with a single built-in plugin, `admin`. The **official ibot plugin collection** is in a separate repository, **[lord3nd3r/ibot-plugins](https://github.com/lord3nd3r/ibot-plugins)**. It's what the `glitchy` deployment runs, and it has its own per-plugin documentation (`docs/`) and a command reference (`commands.md`). It includes AI chat (multi-backend), moderation (anti-flood, anti-spam, auto-op/voice, oper scanning), games and economy (trivia, hunt, mug, beer), and utilities (weather, stock, wiki, seen, tell, quotes, polls, URL and YouTube titles, feeds, channel statistics). To use them, point `[core] extra` at a checkout. See [Using the ibot-plugins collection](docs/administration/plugin-management.md#using-the-ibot-plugins-collection) and that repository's [README](https://github.com/lord3nd3r/ibot-plugins#readme).
 
 ## Running the tests
 

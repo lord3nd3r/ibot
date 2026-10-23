@@ -147,7 +147,7 @@ ibot's core has **no** oper support. There is no `[core]` key for `OPER`, and th
 
   > **Warning:** The command and the password then appear in the channel or query where you typed them, and your incoming message is written verbatim to the bot's debug and raw logs. Only the outgoing `OPER` line is redacted. Only do this in a private message to the bot, and preferably not at all.
 
-- Plugins that need oper privileges keep their own credentials in their own section. For example, a plugin might read `[myplugin] oper_name` / `oper_password` and call `bot.write(('OPER', name, password))` in an event handler for `001`. That's plugin behaviour, not ibot's. Check the plugin's documentation (for example the [sopel-scripts](https://github.com/lord3nd3r/sopel-scripts) docs).
+- Plugins that need oper privileges keep their own credentials in their own section. For example, a plugin might read `[myplugin] oper_name` / `oper_password` and call `bot.write(('OPER', name, password))` in an event handler for `001`. That's plugin behaviour, not ibot's. Check the plugin's documentation (for example the [ibot-plugins](https://github.com/lord3nd3r/ibot-plugins) docs).
 
 ## Account-based permissions
 
