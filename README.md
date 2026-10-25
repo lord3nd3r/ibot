@@ -1,5 +1,7 @@
 # ibot
 
+[![Donate - PayPal](https://img.shields.io/badge/Donate-PayPal-0070ba?style=for-the-badge&logo=paypal&logoColor=white)](https://3nd3r.net/paypal) [![Donate - BTC](https://img.shields.io/badge/Donate-BTC-f7931a?style=for-the-badge&logo=bitcoin&logoColor=white)](https://3nd3r.net/btc)
+
 **ibot** is a small asyncio IRC bot framework that runs **[Sopel](https://sopel.chat/) plugins** with little or no modification. A compatibility shim sits in front of your plugins, so `from sopel import plugin` works without Sopel being installed.
 
 ibot is not a fork of Sopel. It has its own IRC client core (`ibot.bot`), its own dispatcher (`ibot.dispatch`), and a reimplementation of the Sopel plugin API (`ibot.sopel_shim`). That shim is registered in `sys.modules` as `sopel` at startup.
